@@ -18,20 +18,31 @@ Version 0.1.0, early and in active development. Working now:
 1. Symbol cleaning of Claude's replies, and a system prompt section that asks Claude to write plainly.
 2. Speech at four levels through the Windows voices, with stop and repeat.
 3. Listing, testing and choosing a voice, plus rate and volume.
-4. A random done sound when Claude finishes a turn.
+4. Sound cues for four events: done, start, attention and error. Five done sounds come built in, and you can add your own for any event.
 5. A still "Working." line in place of the animated spinner, and "Done, took 12 seconds." at the end of a turn.
 
-Not built yet: plain tool rows and diffs, the other sound cues, notifications, and pause and resume. See the roadmap.
+Not built yet: plain tool rows and diffs, notifications, and pause and resume. See the roadmap.
 
-## Trying it
+## Installing
 
-From this folder, start Claude Code with the mod loaded:
+1. Install Claude Code first.
+2. In this folder, double click `install.cmd`, or run `.\install.ps1` in PowerShell.
+3. The installer checks the mod, adds this folder as a plugin source, installs the mod for your Windows user, and says out loud when it is done.
+4. Start a new Claude Code session and type `/blind` to hear your settings.
 
-```
-claude --plugin-dir plugin
-```
+The installed mod reads from this folder, so any change here applies in the next session. Running the installer again updates an existing install.
 
-Then type `/blind` to hear the current settings. Tip: if you use NVDA, choose the voice named "NVDA Sapi" with `/voice nvda` to hear Blind Claude in your NVDA voice.
+Tip: if you use NVDA, type `/voice nvda` to choose the voice named "NVDA Sapi" and hear Blind Claude in your NVDA voice.
+
+To try the mod for one session without installing it, run `claude --plugin-dir plugin` from this folder.
+
+## Uninstalling
+
+Double click `uninstall.cmd`, or run `.\uninstall.ps1`. Your settings and your own sounds are kept unless you ask otherwise:
+
+1. `.\uninstall.ps1 -RemoveSettings` also deletes your saved settings.
+2. `.\uninstall.ps1 -RemoveSounds` also deletes the sounds you added.
+3. Both scripts take `-Quiet` to skip speaking the result.
 
 ## Checking and testing
 
@@ -60,7 +71,7 @@ These work now, apart from the ones marked as planned in the commands document.
 5. `/voice 3` or `/voice Zira`: choose a voice.
 6. `/rate` and `/volume`: speed and loudness.
 7. `/clean on`, `/clean off` or `/clean words`: symbol cleaning.
-8. `/sounds on`, `/sounds off` or `/sounds test`: the done sound.
+8. `/sounds`: sound cues. `/sounds help` lists the sound commands.
 9. `/blind`: hear a summary of all current settings. `/blind help` lists every command.
 
 ## Platform

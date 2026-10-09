@@ -2,7 +2,7 @@
 
 The order the work will be done in. Each step should be usable on its own before the next one starts.
 
-Progress as of version 0.1.0: steps 1 to 4 are done. Step 5 is partly done: the quiet status line and the done sound work; plain tool rows, diffs, the other sound cues and notifications do not yet. Pause and resume from step 3 are not built.
+Progress as of version 0.1.0: steps 1 to 4 are done. Step 5 is partly done: the quiet status line and sound cues for all four events work; plain tool rows, diffs and notifications do not yet. From step 6, the install and uninstall scripts and the marketplace file are done. Pause and resume from step 3 are not built.
 
 ## Step 1: Skeleton
 

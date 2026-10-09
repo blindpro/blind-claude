@@ -1,4 +1,12 @@
 export type Level = 'all' | 'most' | 'some' | 'none'
+
+// The moments a sound can mark. "start": Claude starts working.
+// "attention": Claude needs permission or has a question.
+export const SOUND_EVENTS = ['done', 'start', 'attention', 'error'] as const
+export type SoundEvent = (typeof SOUND_EVENTS)[number]
+
+// "random" plays a random sound for the event; otherwise the file name to play.
+export type SoundChoice = { isOn: boolean; pick: string }
 export type CleanMode = 'on' | 'off' | 'words'
 
 export type Settings = {
@@ -8,6 +16,7 @@ export type Settings = {
   volume: number
   clean: CleanMode
   sounds: boolean
+  soundEvents: Record<SoundEvent, SoundChoice>
 }
 
 export const LEVELS: readonly Level[] = ['all', 'most', 'some', 'none']
@@ -20,6 +29,12 @@ export const DEFAULTS: Settings = {
   volume: 100,
   clean: 'on',
   sounds: true,
+  soundEvents: {
+    done: { isOn: true, pick: 'random' },
+    start: { isOn: true, pick: 'random' },
+    attention: { isOn: true, pick: 'random' },
+    error: { isOn: true, pick: 'random' },
+  },
 }
 
 export const SETTINGS_KEY = 'settings'
@@ -35,6 +50,20 @@ export function sanitize(value: unknown): Partial<Settings> {
   if (typeof v.volume === 'number') out.volume = clamp(v.volume, 0, 100)
   if (CLEAN_MODES.includes(v.clean as CleanMode)) out.clean = v.clean as CleanMode
   if (typeof v.sounds === 'boolean') out.sounds = v.sounds
+  if (typeof v.soundEvents === 'object' && v.soundEvents !== null) {
+    const saved = v.soundEvents as Record<string, unknown>
+    const events = { ...DEFAULTS.soundEvents }
+    for (const event of SOUND_EVENTS) {
+      const one = saved[event]
+      if (typeof one !== 'object' || one === null) continue
+      const { isOn, pick } = one as Record<string, unknown>
+      events[event] = {
+        isOn: typeof isOn === 'boolean' ? isOn : events[event].isOn,
+        pick: typeof pick === 'string' && pick !== '' ? pick : events[event].pick,
+      }
+    }
+    out.soundEvents = events
+  }
 
   return out
 }

@@ -9,6 +9,7 @@ import type { EngineInterface, Register } from 'claude-code'
 import { cleanForDisplay, cleanForSpeech } from './clean'
 import {
   CLEAN_MODES,
+  SOUND_EVENTS,
   DEFAULTS,
   LEVELS,
   SETTINGS_KEY,
@@ -16,7 +17,9 @@ import {
   describeSettings,
   sanitize,
 } from './settings'
-import type { CleanMode, Level, Settings } from './settings'
+import type { CleanMode, Level, Settings, SoundEvent } from './settings'
+import { SOUNDS_HELP, chooseSound, findSound, isPlayable, isSoundEvent, listText, overviewText, sortSounds } from './sounds'
+import type { SoundFile } from './sounds'
 import {
   describeToolCall,
   describeToolResult,
@@ -35,7 +38,6 @@ import type { Voice } from './speech'
 
 type Engine = EngineInterface
 
-const DONE_SOUNDS = ['done-1.wav', 'done-2.wav', 'done-3.wav', 'done-4.wav', 'done-5.wav']
 
 const PLAIN_WRITING = [
   'The person using this session is blind and uses a screen reader and text to speech.',
@@ -57,7 +59,7 @@ const HELP = [
   '/rate and a number from -10 to 10, or faster or slower: set the speed.',
   '/volume and a number from 0 to 100: set the volume.',
   '/clean on, off or words: symbol cleaning.',
-  '/sounds on, off or test: sound cues.',
+  '/sounds: sound cues for done, start, attention and error. /sounds help for details.',
   '/blind: current settings. /blind reset: back to defaults.',
 ].join('\n')
 
@@ -104,12 +106,52 @@ async function stopSpeech($: Engine): Promise<void> {
   await sendToServer($, { op: 'stop' })
 }
 
-async function playDoneSound($: Engine): Promise<void> {
-  if (!current.sounds) return
-  const file = DONE_SOUNDS[Math.floor(Math.random() * DONE_SOUNDS.length)]!
-  const isSent = await sendToServer($, { op: 'play', path: `${$.plugin.root}\\sounds\\done\\${file}` })
-  if (isSent) return
-  void $.audio.play({ asset: `sounds/done/${file}` }).catch(() => undefined)
+// Where the person's own sounds live, outside the plugin folder so they
+// survive updates and reinstalls.
+async function customSoundRoot($: Engine): Promise<string | null> {
+  const base = (await $.env.get('LOCALAPPDATA')) ?? (await $.env.get('APPDATA'))
+
+  return base ? `${base}\\BlindClaude\\sounds` : null
+}
+
+async function listFolder($: Engine, folder: string, isCustom: boolean): Promise<SoundFile[]> {
+  try {
+    const entries = await $.fs.list(folder)
+    return entries
+      .filter(entry => entry.kind === 'file' && isPlayable(entry.name))
+      .map(entry => ({ name: entry.name, path: `${folder}\\${entry.name}`, isCustom }))
+  } catch {
+    return []
+  }
+}
+
+async function soundFiles($: Engine, event: SoundEvent): Promise<SoundFile[]> {
+  const builtIn = await listFolder($, `${$.plugin.root}\\sounds\\${event}`, false)
+  const root = await customSoundRoot($)
+  const custom = root === null ? [] : await listFolder($, `${root}\\${event}`, true)
+
+  return sortSounds([...builtIn, ...custom])
+}
+
+async function playFile($: Engine, file: SoundFile): Promise<void> {
+  const isSent = await sendToServer($, { op: 'play', path: file.path })
+  if (isSent || file.isCustom) return
+  const relative = file.path.slice($.plugin.root.length + 1).replace(/\\/g, '/')
+  void $.audio.play({ asset: relative }).catch(() => undefined)
+}
+
+async function playSound($: Engine, event: SoundEvent): Promise<void> {
+  const choice = current.soundEvents[event]
+  if (!current.sounds || !choice.isOn) return
+  const file = chooseSound(await soundFiles($, event), choice.pick, Math.random())
+  if (file) await playFile($, file)
+}
+
+async function runSoundScript($: Engine, args: string[]): Promise<string> {
+  const script = `${$.plugin.root}\\scripts\\sound-files.ps1`
+  const ran = await $.process.run(['powershell.exe', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script, ...args], { timeoutMs: 60_000 })
+
+  return ran.stdout.trim().split('\n').pop()?.trim() ?? ''
 }
 
 async function requestVoices($: Engine): Promise<Voice[] | null> {
@@ -186,7 +228,7 @@ export const register: Register = on => {
       { name: 'rate', description: 'Blind Claude: set the speech speed', argumentHint: '[-10 to 10|faster|slower]' },
       { name: 'volume', description: 'Blind Claude: set the speech volume', argumentHint: '[0 to 100]' },
       { name: 'clean', description: 'Blind Claude: turn symbol cleaning on, off, or words', argumentHint: '[on|off|words]' },
-      { name: 'sounds', description: 'Blind Claude: turn sound cues on or off', argumentHint: '[on|off|test]' },
+      { name: 'sounds', description: 'Blind Claude: list, play, pick, add and remove sound cues', argumentHint: '[help|on|off|list|play|pick|add|remove|folder]' },
       { name: 'blind', description: 'Blind Claude: show settings, help, or reset', argumentHint: '[help|reset]' },
     ]
     for (const command of commands) await $.command.register({ ...command, immediate: true })
@@ -259,10 +301,18 @@ export const register: Register = on => {
     return ran
   }).catch(($, e, next) => next(e))
 
+  on('turn.start', async ($, e, next) => {
+    const started = await next(e)
+    await playSound($, 'start')
+
+    return started
+  }).catch(($, e, next) => next(e))
+
   // Permission requests and questions from Claude Code.
   on('classic.Notification', async ($, e, next) => {
-    if (speaksAlerts(current.level) && !/idle/i.test(e.notification_type)) {
-      await speak($, e.message, { interrupt: false })
+    if (!/idle/i.test(e.notification_type)) {
+      await playSound($, 'attention')
+      if (speaksAlerts(current.level)) await speak($, e.message, { interrupt: false })
     }
 
     return next(e)
@@ -274,10 +324,11 @@ export const register: Register = on => {
 
     if (e.reason === 'answer') {
       if (e.answer.trim() !== '') lastReply = e.answer
-      await playDoneSound($)
+      await playSound($, 'done')
       if (speaksFinalAnswer(current.level)) await speak($, e.answer)
-    } else if (e.reason === 'error' && speaksAlerts(current.level)) {
-      await speak($, 'Claude stopped because of an error.', { isRaw: true })
+    } else if (e.reason === 'error') {
+      await playSound($, 'error')
+      if (speaksAlerts(current.level)) await speak($, 'Claude stopped because of an error.', { isRaw: true })
     } else if (e.reason === 'refusal' && speaksAlerts(current.level)) {
       await speak($, 'Claude declined to continue.', { isRaw: true })
     }
@@ -380,18 +431,99 @@ export const register: Register = on => {
   }).catch(commandFailed)
 
   on('command.run', { command: 'sounds' }, async ($, e) => {
-    const [choice] = word(e.args)
-    if (choice === 'test') {
-      const was = current.sounds
-      current = { ...current, sounds: true }
-      await playDoneSound($)
-      current = { ...current, sounds: was }
-      return { text: 'Played a done sound.' }
-    }
-    if (choice !== 'on' && choice !== 'off') return { text: `Sounds are ${current.sounds ? 'on' : 'off'}. Use on, off or test.` }
-    await saveSettings($, { sounds: choice === 'on' })
+    const parts = e.args.trim().split(/\s+/).filter(part => part !== '')
+    const [first = '', second = '', ...rest] = parts
+    const action = first.toLowerCase()
+    const eventWord = second.toLowerCase()
 
-    return { text: `Sounds turned ${choice}.` }
+    const saveEvent = async (event: SoundEvent, change: Partial<Settings['soundEvents'][SoundEvent]>) => {
+      await saveSettings($, { soundEvents: { ...current.soundEvents, [event]: { ...current.soundEvents[event], ...change } } })
+    }
+    const ambiguous = (files: readonly SoundFile[]) => `More than one sound matches: ${files.map(f => f.name).join(', ')}. Be more specific.`
+
+    if (action === '') {
+      const counts = { done: 0, start: 0, attention: 0, error: 0 }
+      for (const event of SOUND_EVENTS) counts[event] = (await soundFiles($, event)).length
+      return { text: overviewText(current, counts) }
+    }
+    if (action === 'help') return { text: SOUNDS_HELP }
+    if (action === 'on' || action === 'off') {
+      await saveSettings($, { sounds: action === 'on' })
+      return { text: `All sounds turned ${action}.` }
+    }
+    if (action === 'test') {
+      const file = chooseSound(await soundFiles($, 'done'), current.soundEvents.done.pick, Math.random())
+      if (!file) return { text: 'There are no done sounds.' }
+      await playFile($, file)
+      return { text: `Played ${file.name}.` }
+    }
+    if (action === 'folder') {
+      const root = await customSoundRoot($)
+      return { text: root ? `Your own sounds are kept in ${root}, one folder per event. WAV files placed there are used right away.` : 'Could not find your local app data folder.' }
+    }
+
+    // "/sounds done on" turns one event on or off.
+    if (isSoundEvent(action) && (eventWord === 'on' || eventWord === 'off')) {
+      await saveEvent(action, { isOn: eventWord === 'on' })
+      return { text: `${action} sound turned ${eventWord}.` }
+    }
+
+    if (!isSoundEvent(eventWord)) {
+      return { text: `Name an event: done, start, attention or error. For example, /sounds ${action} done. Type /sounds help for all sound commands.` }
+    }
+    const event = eventWord
+    const files = await soundFiles($, event)
+    const query = rest.join(' ')
+
+    if (action === 'list') return { text: listText(event, files, current.soundEvents[event]) }
+
+    if (action === 'play') {
+      const chosen = query === '' ? chooseSound(files, current.soundEvents[event].pick, Math.random()) : undefined
+      const matches = query === '' ? (chosen ? [chosen] : []) : findSound(files, query)
+      if (matches.length === 0) return { text: files.length === 0 ? `No ${event} sounds yet.` : `No ${event} sound matches "${query}".` }
+      if (matches.length > 1) return { text: ambiguous(matches) }
+      await playFile($, matches[0]!)
+      return { text: `Played ${matches[0]!.name}.` }
+    }
+
+    if (action === 'pick') {
+      if (query === '' || query.toLowerCase() === 'random') {
+        await saveEvent(event, { pick: 'random' })
+        return { text: `${event} will play a random sound each time.` }
+      }
+      const matches = findSound(files, query)
+      if (matches.length === 0) return { text: `No ${event} sound matches "${query}". Type /sounds list ${event}.` }
+      if (matches.length > 1) return { text: ambiguous(matches) }
+      await saveEvent(event, { pick: matches[0]!.name })
+      await playFile($, matches[0]!)
+      return { text: `${event} will always play ${matches[0]!.name}.` }
+    }
+
+    if (action === 'add') {
+      const source = query.replace(/^"(.*)"$/, '$1')
+      if (source === '') return { text: `Give the path to a sound file, such as /sounds add ${event} C:\\sounds\\ding.wav.` }
+      const root = await customSoundRoot($)
+      if (root === null) return { text: 'Could not find your local app data folder.' }
+      const answer = await runSoundScript($, ['-Action', 'add', '-Source', source, '-Dest', `${root}\\${event}`])
+      if (!answer.startsWith('OK ')) return { text: `Could not add the sound: ${answer.replace(/^ERROR /, '') || 'unknown error'}.` }
+      const name = answer.slice(3)
+      await playFile($, { name, path: `${root}\\${event}\\${name}`, isCustom: true })
+      return { text: `Added ${name} to the ${event} sounds.` }
+    }
+
+    if (action === 'remove') {
+      const matches = findSound(files, query)
+      if (query === '' || matches.length === 0) return { text: `No ${event} sound matches "${query}". Type /sounds list ${event}.` }
+      if (matches.length > 1) return { text: ambiguous(matches) }
+      const file = matches[0]!
+      if (!file.isCustom) return { text: `${file.name} comes with Blind Claude and cannot be removed. Turn the event off, or pick another sound, instead.` }
+      const answer = await runSoundScript($, ['-Action', 'remove', '-Source', file.path])
+      if (!answer.startsWith('OK ')) return { text: `Could not remove the sound: ${answer.replace(/^ERROR /, '') || 'unknown error'}.` }
+      if (current.soundEvents[event].pick.toLowerCase() === file.name.toLowerCase()) await saveEvent(event, { pick: 'random' })
+      return { text: `Removed ${file.name}.` }
+    }
+
+    return { text: `Unknown sound command "${action}". Type /sounds help for the list.` }
   }).catch(commandFailed)
 
   on('command.run', { command: 'blind' }, async ($, e) => {

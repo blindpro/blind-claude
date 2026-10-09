@@ -55,7 +55,7 @@ const HELP = [
   '/speak all, most, some or none: choose how much is spoken.',
   '/speak stop: stop speaking now.',
   '/speak repeat: say the last reply again.',
-  '/voice: list voices. /voice and a number or name: choose one. /voice test and a number or name: hear a sample.',
+  '/voices: list voices. /voices and a number or name: choose one. /voices test and a number or name: hear a sample.',
   '/rate and a number from -10 to 10, or faster or slower: set the speed.',
   '/volume and a number from 0 to 100: set the volume.',
   '/clean on, off or words: symbol cleaning.',
@@ -224,14 +224,22 @@ export const register: Register = on => {
 
     const commands = [
       { name: 'speak', description: 'Blind Claude: set how much is spoken, or stop and repeat speech', argumentHint: '[all|most|some|none|stop|repeat]' },
-      { name: 'voice', description: 'Blind Claude: list, test and choose a speech voice', argumentHint: '[number|name|test <voice>|default]' },
+      { name: 'voices', description: 'Blind Claude: list, test and choose a speech voice', argumentHint: '[number|name|test <voice>|default]' },
       { name: 'rate', description: 'Blind Claude: set the speech speed', argumentHint: '[-10 to 10|faster|slower]' },
       { name: 'volume', description: 'Blind Claude: set the speech volume', argumentHint: '[0 to 100]' },
       { name: 'clean', description: 'Blind Claude: turn symbol cleaning on, off, or words', argumentHint: '[on|off|words]' },
       { name: 'sounds', description: 'Blind Claude: list, play, pick, add and remove sound cues', argumentHint: '[help|on|off|list|play|pick|add|remove|folder]' },
       { name: 'blind', description: 'Blind Claude: show settings, help, or reset', argumentHint: '[help|reset]' },
     ]
-    for (const command of commands) await $.command.register({ ...command, immediate: true })
+    // Claude Code refuses a name one of its own commands uses, and some exist
+    // only in interactive sessions. One refusal must not stop the others.
+    for (const command of commands) {
+      try {
+        await $.command.register({ ...command, immediate: true })
+      } catch (error) {
+        $.ui.log(`Blind Claude could not add /${command.name}: ${String(error)}`)
+      }
+    }
 
     if ((await $.env.get('OS')) === 'Windows_NT') await startSpeechServer($)
 
@@ -358,7 +366,7 @@ export const register: Register = on => {
     return { text: `Unknown option "${choice}". Use all, most, some, none, stop or repeat.` }
   }).catch(commandFailed)
 
-  on('command.run', { command: 'voice' }, async ($, e) => {
+  on('command.run', { command: 'voices' }, async ($, e) => {
     const [first, rest] = word(e.args)
     if (first === 'default') {
       await saveSettings($, { voice: null })
@@ -377,7 +385,7 @@ export const register: Register = on => {
     const query = isTest ? rest : e.args.trim()
     if (query === '') return { text: 'Say which voice to test, by number or name.' }
     const matches = findVoice(voices, query)
-    if (matches.length === 0) return { text: `No voice matches "${query}". Type /voice to list them.` }
+    if (matches.length === 0) return { text: `No voice matches "${query}". Type /voices to list them.` }
     if (matches.length > 1) return { text: `More than one voice matches: ${matches.map(v => v.name).join(', ')}. Be more specific.` }
     const voice = matches[0]!
 

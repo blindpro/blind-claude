@@ -4,7 +4,7 @@ This document explains how to list, test and choose a voice, and how to change s
 
 ## Listing voices
 
-Type `/voice` with nothing after it. Blind Claude lists every voice the current speech engine can use, numbered, with its language and whether it is the one in use. For example:
+Type `/voices` with nothing after it. Blind Claude lists every voice the current speech engine can use, numbered, with its language and whether it is the one in use. For example:
 
 1. Microsoft David, English, United States.
 2. Microsoft Zira, English, United States. In use.
@@ -14,16 +14,16 @@ The list is also spoken if speech is on.
 
 ## Testing a voice
 
-Type `/voice test` followed by a number or name, such as `/voice test 3`. Blind Claude speaks a short sample sentence in that voice without changing your choice.
+Type `/voices test` followed by a number or name, such as `/voices test 3`. Blind Claude speaks a short sample sentence in that voice without changing your choice.
 
 ## Choosing a voice
 
-Type `/voice` followed by a number or part of a name.
+Type `/voices` followed by a number or part of a name.
 
-1. `/voice 3` chooses the third voice in the list.
-2. `/voice zira` chooses the voice whose name contains "zira". Case does not matter.
+1. `/voices 3` chooses the third voice in the list.
+2. `/voices zira` chooses the voice whose name contains "zira". Case does not matter.
 3. If more than one voice matches, Blind Claude lists the matches and asks you to be more specific.
-4. `/voice default` goes back to the system default voice.
+4. `/voices default` goes back to the system default voice.
 
 The new voice says "Voice changed to" followed by its name, so you hear it right away. The choice is saved between sessions.
 

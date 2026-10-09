@@ -54,7 +54,7 @@ Rewriting a row in `ui.render` only changes what is drawn. It never changes what
 ### Commands and settings
 
 1. `session.start`: registers the slash commands and loads saved settings.
-2. `command.run`: answers `/speak`, `/voice`, `/clean` and `/blind`.
+2. `command.run`: answers `/speak`, `/voices`, `/clean` and `/blind`.
 3. `$.store`: keeps settings between sessions.
 4. `userConfig` in the manifest: exposes the main settings in the Claude Code config menu as well.
 

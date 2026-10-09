@@ -20,10 +20,10 @@ Every Blind Claude slash command and setting in one place. All settings are save
 
 ### Voice
 
-1. `/voice`: list the installed voices.
-2. `/voice` followed by a number or name: choose a voice.
-3. `/voice test` followed by a number or name: hear a sample without choosing it.
-4. `/voice default`: use the system default voice.
+1. `/voices`: list the installed voices.
+2. `/voices` followed by a number or name: choose a voice.
+3. `/voices test` followed by a number or name: hear a sample without choosing it.
+4. `/voices default`: use the system default voice.
 5. `/rate` followed by a number from minus 10 to 10, or `/rate faster`, or `/rate slower`: set the speed.
 6. `/volume` followed by a number from 0 to 100: set the volume.
 

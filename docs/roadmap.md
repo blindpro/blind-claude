@@ -29,7 +29,7 @@ Progress as of version 0.1.0: steps 1 to 4 are done. Step 5 is partly done: the 
 ## Step 4: Voices
 
 1. List SAPI voices.
-2. Add `/voice`, `/voice test`, `/rate` and `/volume`.
+2. Add `/voices`, `/voices test`, `/rate` and `/volume`.
 3. Handle a saved voice that is no longer installed.
 
 ## Step 5: Terminal experience

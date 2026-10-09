@@ -169,7 +169,7 @@ export function listVoicesText(voices: readonly Voice[], chosen: string | null):
     return `${i + 1}. ${v.name}${culture}.${inUse ? ' In use.' : ''}`
   })
 
-  return [`${voices.length} voices installed.`, ...lines, 'Type /voice and a number or name to choose one.'].join('\n')
+  return [`${voices.length} voices installed.`, ...lines, 'Type /voices and a number or name to choose one.'].join('\n')
 }
 
 export function formatDuration(ms: number): string {

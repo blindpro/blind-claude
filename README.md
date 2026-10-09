@@ -32,7 +32,7 @@ Not built yet: plain tool rows and diffs, notifications, and pause and resume. S
 
 The installed mod reads from this folder, so any change here applies in the next session. Running the installer again updates an existing install.
 
-Tip: if you use NVDA, type `/voice nvda` to choose the voice named "NVDA Sapi" and hear Blind Claude in your NVDA voice.
+Tip: if you use NVDA, type `/voices nvda` to choose the voice named "NVDA Sapi" and hear Blind Claude in your NVDA voice.
 
 To try the mod for one session without installing it, run `claude --plugin-dir plugin` from this folder.
 
@@ -67,8 +67,8 @@ These work now, apart from the ones marked as planned in the commands document.
 1. `/speak all`, `/speak most`, `/speak some`, `/speak none`: choose how much is spoken.
 2. `/speak stop`: stop talking right now.
 3. `/speak repeat`: say the last reply again.
-4. `/voice`: list the installed voices.
-5. `/voice 3` or `/voice Zira`: choose a voice.
+4. `/voices`: list the installed voices.
+5. `/voices 3` or `/voices Zira`: choose a voice.
 6. `/rate` and `/volume`: speed and loudness.
 7. `/clean on`, `/clean off` or `/clean words`: symbol cleaning.
 8. `/sounds`: sound cues. `/sounds help` lists the sound commands.

@@ -161,17 +161,6 @@ export function findVoice(voices: readonly Voice[], query: string): Voice[] {
   return voices.filter(v => v.name.toLowerCase().includes(q))
 }
 
-export function listVoicesText(voices: readonly Voice[], chosen: string | null): string {
-  if (voices.length === 0) return 'No voices were found.'
-  const lines = voices.map((v, i) => {
-    const inUse = chosen ? v.name === chosen : v.current
-    const culture = v.culture ? `, ${v.culture}` : ''
-    return `${i + 1}. ${v.name}${culture}.${inUse ? ' In use.' : ''}`
-  })
-
-  return [`${voices.length} voices installed.`, ...lines, 'Type /voices and a number or name to choose one.'].join('\n')
-}
-
 export function formatDuration(ms: number): string {
   const seconds = Math.max(0, Math.round(ms / 1000))
   if (seconds < 60) return seconds === 1 ? '1 second' : `${seconds} seconds`

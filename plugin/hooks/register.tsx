@@ -7,6 +7,8 @@
 import type { EngineInterface, Register } from 'claude-code'
 
 import { cleanForDisplay, cleanForSpeech } from './clean'
+import { RESET_MESSAGE, choose, parseChoice, screenText } from './menu'
+import type { MenuContext, Screen } from './menu'
 import {
   CLEAN_MODES,
   SOUND_EVENTS,
@@ -25,7 +27,6 @@ import {
   describeToolResult,
   findVoice,
   formatDuration,
-  listVoicesText,
   parseVoices,
   speaksAlerts,
   speaksFinalAnswer,
@@ -60,7 +61,9 @@ const HELP = [
   '/volume and a number from 0 to 100: set the volume.',
   '/clean on, off or words: symbol cleaning.',
   '/sounds: sound cues for done, start, attention and error. /sounds help for details.',
-  '/blind: current settings. /blind reset: back to defaults.',
+  '/blind: open the settings menu. Type a number and press Enter to choose; 0 goes back.',
+  '/speak, /voices, /rate, /volume, /clean or /sounds on their own open that part of the menu.',
+  '/blind status: current settings in one list. /blind reset: back to defaults.',
 ].join('\n')
 
 // Module state. A hot reload starts these over; settings are read back from the store.
@@ -68,6 +71,8 @@ let current: Settings = { ...DEFAULTS }
 let lastReply = ''
 let bridge: { spool: string; isReady: boolean; seq: number } | null = null
 let voicesWaiter: ((json: string) => void) | null = null
+// The settings menu screen open now, or null when the menu is closed.
+let menu: Screen | null = null
 
 async function saveSettings($: Engine, change: Partial<Settings>): Promise<void> {
   current = { ...current, ...change }
@@ -104,6 +109,13 @@ async function speak($: Engine, text: string, options: { interrupt?: boolean; is
 
 async function stopSpeech($: Engine): Promise<void> {
   await sendToServer($, { op: 'stop' })
+}
+
+async function resetSettings($: Engine): Promise<void> {
+  current = { ...DEFAULTS }
+  await $.store.set(SETTINGS_KEY, current)
+  await sendVoiceConfig($)
+  $.ui.invalidate('ui.render')
 }
 
 // Where the person's own sounds live, outside the plugin folder so they
@@ -208,6 +220,55 @@ async function startSpeechServer($: Engine): Promise<void> {
   })()
 }
 
+function engineName(): string {
+  return bridge?.isReady ? 'Windows speech server' : 'Claude Code built in speech'
+}
+
+// Fetches only what the screen needs: voices for the voice list (and for
+// opening it from the main screen), sound files for one event.
+async function menuContext($: Engine, screen: Screen, needsVoices = false): Promise<MenuContext> {
+  const voices = screen.kind === 'voice' || needsVoices ? await requestVoices($) : null
+  const files = screen.kind === 'event' ? await soundFiles($, screen.event) : []
+
+  return { settings: current, engine: engineName(), voices, files }
+}
+
+// Opens a menu screen: its text, after an optional message, shown and spoken.
+async function showScreen($: Engine, screen: Screen, message?: string): Promise<string> {
+  menu = screen
+  const body = screenText(screen, await menuContext($, screen))
+  const text = message ? `${message}\n${body}` : body
+  if (current.level !== 'none') await speak($, text, { interrupt: true, isRaw: true })
+
+  return text
+}
+
+async function applyChange($: Engine, change: Partial<Settings>): Promise<void> {
+  await saveSettings($, change)
+  if ('voice' in change || 'rate' in change || 'volume' in change) await sendVoiceConfig($)
+  if ('clean' in change) $.ui.invalidate('ui.render')
+  if (change.level === 'none') await stopSpeech($)
+}
+
+// Answers a number typed while the menu is open.
+async function answerMenu($: Engine, screen: Screen, choice: number): Promise<string> {
+  const answer = choose(screen, choice, await menuContext($, screen, screen.kind === 'main' && choice === 2))
+  if (answer.kind === 'close') {
+    menu = null
+    if (current.level !== 'none') await speak($, 'Menu closed.', { interrupt: true, isRaw: true })
+    return 'Settings menu closed.'
+  }
+  if (answer.kind === 'open') return showScreen($, answer.screen, answer.message)
+  if (answer.kind === 'reset') {
+    await resetSettings($)
+    return showScreen($, answer.screen, RESET_MESSAGE)
+  }
+  await applyChange($, answer.change)
+  if (answer.play) await playFile($, answer.play)
+
+  return showScreen($, answer.screen, answer.message)
+}
+
 function word(args: string): [string, string] {
   const trimmed = args.trim()
   const space = trimmed.search(/\s/)
@@ -228,8 +289,8 @@ export const register: Register = on => {
       { name: 'rate', description: 'Blind Claude: set the speech speed', argumentHint: '[-10 to 10|faster|slower]' },
       { name: 'volume', description: 'Blind Claude: set the speech volume', argumentHint: '[0 to 100]' },
       { name: 'clean', description: 'Blind Claude: turn symbol cleaning on, off, or words', argumentHint: '[on|off|words]' },
-      { name: 'sounds', description: 'Blind Claude: list, play, pick, add and remove sound cues', argumentHint: '[help|on|off|list|play|pick|add|remove|folder]' },
-      { name: 'blind', description: 'Blind Claude: show settings, help, or reset', argumentHint: '[help|reset]' },
+      { name: 'sounds', description: 'Blind Claude: list, play, pick, add and remove sound cues', argumentHint: '[help|status|on|off|list|play|pick|add|remove|folder]' },
+      { name: 'blind', description: 'Blind Claude: open the settings menu, show status or help, or reset', argumentHint: '[help|status|reset]' },
     ]
     // Claude Code refuses a name one of its own commands uses, and some exist
     // only in interactive sessions. One refusal must not stop the others.
@@ -276,9 +337,24 @@ export const register: Register = on => {
     return <Text dimColor>Done, took {formatDuration(e.props.durationMs)}.</Text>
   })
 
-  // A new message stops any speech still playing.
+  // A new message stops any speech still playing. While the settings menu
+  // is open, a number typed at the prompt answers the menu and never reaches
+  // Claude; anything else closes the menu and goes to Claude as usual.
   on('prompt.submit', async ($, e, next) => {
     await stopSpeech($)
+    if (menu !== null) {
+      const isPerson = e.origin.kind === 'composer' || e.origin.kind === 'bridge'
+      const choice = isPerson && e.attachments === undefined ? parseChoice(e.text) : null
+      if (choice !== null) {
+        try {
+          return { drop: await answerMenu($, menu, choice) }
+        } catch (error) {
+          $.ui.log(`Blind Claude menu failed: ${String(error)}`, { to: 'debug' })
+          return { drop: 'That menu choice failed. Type /blind to open the menu again.' }
+        }
+      }
+      if (isPerson) menu = null
+    }
 
     return next(e)
   }).catch(($, e, next) => next(e))
@@ -346,7 +422,7 @@ export const register: Register = on => {
 
   on('command.run', { command: 'speak' }, async ($, e) => {
     const [choice] = word(e.args)
-    if (choice === '') return { text: `Speech level is ${current.level}.` }
+    if (choice === '') return { text: await showScreen($, { kind: 'level' }) }
     if (choice === 'stop') {
       await stopSpeech($)
       return { text: 'Speech stopped.' }
@@ -379,7 +455,7 @@ export const register: Register = on => {
     if (voices === null) {
       return { text: 'The voice list is only available on Windows while the speech server is running. Try again in a moment.' }
     }
-    if (first === '') return { text: listVoicesText(voices, current.voice) }
+    if (first === '') return { text: await showScreen($, { kind: 'voice' }) }
 
     const isTest = first === 'test'
     const query = isTest ? rest : e.args.trim()
@@ -404,7 +480,7 @@ export const register: Register = on => {
 
   on('command.run', { command: 'rate' }, async ($, e) => {
     const [choice] = word(e.args)
-    if (choice === '') return { text: `Speech rate is ${current.rate}.` }
+    if (choice === '') return { text: await showScreen($, { kind: 'rate' }) }
     let rate = current.rate
     if (choice === 'faster') rate += 1
     else if (choice === 'slower') rate -= 1
@@ -419,7 +495,7 @@ export const register: Register = on => {
 
   on('command.run', { command: 'volume' }, async ($, e) => {
     const [choice] = word(e.args)
-    if (choice === '') return { text: `Speech volume is ${current.volume}.` }
+    if (choice === '') return { text: await showScreen($, { kind: 'volume' }) }
     if (!/^\d+$/.test(choice)) return { text: 'Use a number from 0 to 100.' }
     await saveSettings($, { volume: clamp(Number(choice), 0, 100) })
     await sendVoiceConfig($)
@@ -430,7 +506,7 @@ export const register: Register = on => {
 
   on('command.run', { command: 'clean' }, async ($, e) => {
     const [choice] = word(e.args)
-    if (choice === '') return { text: `Symbol cleaning is ${current.clean}.` }
+    if (choice === '') return { text: await showScreen($, { kind: 'clean' }) }
     if (!CLEAN_MODES.includes(choice as CleanMode)) return { text: 'Use on, off or words.' }
     await saveSettings($, { clean: choice as CleanMode })
     $.ui.invalidate('ui.render')
@@ -449,7 +525,8 @@ export const register: Register = on => {
     }
     const ambiguous = (files: readonly SoundFile[]) => `More than one sound matches: ${files.map(f => f.name).join(', ')}. Be more specific.`
 
-    if (action === '') {
+    if (action === '') return { text: await showScreen($, { kind: 'sounds' }) }
+    if (action === 'status') {
       const counts = { done: 0, start: 0, attention: 0, error: 0 }
       for (const event of SOUND_EVENTS) counts[event] = (await soundFiles($, event)).length
       return { text: overviewText(current, counts) }
@@ -538,16 +615,15 @@ export const register: Register = on => {
     const [choice] = word(e.args)
     if (choice === 'help') return { text: HELP }
     if (choice === 'reset') {
-      current = { ...DEFAULTS }
-      await $.store.set(SETTINGS_KEY, current)
-      await sendVoiceConfig($)
-      $.ui.invalidate('ui.render')
-      return { text: 'All Blind Claude settings are back to their defaults.' }
+      await resetSettings($)
+      return { text: RESET_MESSAGE }
     }
-    const engine = bridge?.isReady ? 'Windows speech server' : 'Claude Code built in speech'
-    const summary = `${describeSettings(current)}\nSpeech engine: ${engine}.\nType /blind help for all commands.`
-    await speak($, summary, { interrupt: true, isRaw: true })
+    if (choice === 'status') {
+      const summary = `${describeSettings(current)}\nSpeech engine: ${engineName()}.\nType /blind help for all commands.`
+      await speak($, summary, { interrupt: true, isRaw: true })
+      return { text: summary }
+    }
 
-    return { text: summary }
+    return { text: await showScreen($, { kind: 'main' }) }
   }).catch(commandFailed)
 }

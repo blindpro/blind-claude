@@ -4,7 +4,6 @@ import {
   describeToolCall,
   findVoice,
   formatDuration,
-  listVoicesText,
   parseVoices,
   speaksToolCall,
   spoolName,
@@ -50,11 +49,6 @@ test('finds voices by number or name', () => {
   expect(findVoice(VOICES, '9')).toEqual([])
 })
 
-test('lists voices with the one in use marked', () => {
-  const text = listVoicesText(VOICES, 'Microsoft Zira Desktop')
-  expect(text).toContain('3. Microsoft Zira Desktop, English (United States). In use.')
-  expect(text).toContain('1. NVDA Sapi, English.')
-})
 
 test('formats durations in words', () => {
   expect(formatDuration(1000)).toBe('1 second')

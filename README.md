@@ -28,7 +28,7 @@ Not built yet: plain tool rows and diffs, notifications, and pause and resume. S
 1. Install Claude Code first.
 2. In this folder, double click `install.cmd`, or run `.\install.ps1` in PowerShell.
 3. The installer checks the mod, adds this folder as a plugin source, installs the mod for your Windows user, and says out loud when it is done.
-4. Start a new Claude Code session and type `/blind` to hear your settings.
+4. Start a new Claude Code session and type `/blind` to open the settings menu.
 
 The installed mod reads from this folder, so any change here applies in the next session. Running the installer again updates an existing install.
 
@@ -67,12 +67,12 @@ These work now, apart from the ones marked as planned in the commands document.
 1. `/speak all`, `/speak most`, `/speak some`, `/speak none`: choose how much is spoken.
 2. `/speak stop`: stop talking right now.
 3. `/speak repeat`: say the last reply again.
-4. `/voices`: list the installed voices.
+4. `/voices`: list the installed voices and choose one by number.
 5. `/voices 3` or `/voices Zira`: choose a voice.
 6. `/rate` and `/volume`: speed and loudness.
 7. `/clean on`, `/clean off` or `/clean words`: symbol cleaning.
 8. `/sounds`: sound cues. `/sounds help` lists the sound commands.
-9. `/blind`: hear a summary of all current settings. `/blind help` lists every command.
+9. `/blind`: open the settings menu. Type a number and press Enter to pick a setting, then a number for its choice. 0 goes back. `/blind status` reads every setting in one list, and `/blind help` lists every command.
 
 ## Platform
 

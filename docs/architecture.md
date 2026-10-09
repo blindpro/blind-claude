@@ -48,15 +48,16 @@ Rewriting a row in `ui.render` only changes what is drawn. It never changes what
 
 1. `session.append`: sees every row as it is added to the conversation, including each block of Claude's reply and each tool result. The speech layer decides from the current speech level whether to speak it.
 2. `turn.complete`: marks the end of a reply. At the "some" level, this is when the final reply is spoken.
-3. `prompt.submit`: when you send a new message, any speech still playing is stopped.
+3. `prompt.submit`: when you send a new message, any speech still playing is stopped. While the settings menu is open, a number you type is answered by the menu and dropped, so it never reaches Claude.
 4. `tool.call`: announces tool calls at the "all" and "most" levels, and permission requests at every level except "none".
 
 ### Commands and settings
 
 1. `session.start`: registers the slash commands and loads saved settings.
-2. `command.run`: answers `/speak`, `/voices`, `/clean` and `/blind`.
-3. `$.store`: keeps settings between sessions.
-4. `userConfig` in the manifest: exposes the main settings in the Claude Code config menu as well.
+2. `command.run`: answers `/speak`, `/voices`, `/rate`, `/volume`, `/clean`, `/sounds` and `/blind`. Each one typed on its own opens its part of the settings menu.
+3. `plugin/hooks/menu.ts`: the settings menu screens and what each number does there, with no engine calls, so it is easy to test.
+4. `$.store`: keeps settings between sessions.
+5. `userConfig` in the manifest: exposes the main settings in the Claude Code config menu as well.
 
 ## Flow of one reply
 

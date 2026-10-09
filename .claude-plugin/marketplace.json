@@ -1,0 +1,12 @@
+{
+  "name": "blind-claude",
+  "description": "Blind Claude, an accessibility mod for Claude Code.",
+  "owner": { "name": "blindpro", "email": "noahbalboa34@gmail.com" },
+  "plugins": [
+    {
+      "name": "blind-claude",
+      "source": "./plugin",
+      "description": "Makes Claude Code friendlier for blind and screen reader users: clean output, text to speech, voice choice and sound cues."
+    }
+  ]
+}

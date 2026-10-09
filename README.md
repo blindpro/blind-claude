@@ -13,7 +13,30 @@ Claude Code is built for people who look at the terminal. It draws boxes, bullet
 
 ## Status
 
-Planning. The documentation describes what will be built. No code has been written yet.
+Version 0.1.0, early and in active development. Working now:
+
+1. Symbol cleaning of Claude's replies, and a system prompt section that asks Claude to write plainly.
+2. Speech at four levels through the Windows voices, with stop and repeat.
+3. Listing, testing and choosing a voice, plus rate and volume.
+4. A random done sound when Claude finishes a turn.
+5. A still "Working." line in place of the animated spinner, and "Done, took 12 seconds." at the end of a turn.
+
+Not built yet: plain tool rows and diffs, the other sound cues, notifications, and pause and resume. See the roadmap.
+
+## Trying it
+
+From this folder, start Claude Code with the mod loaded:
+
+```
+claude --plugin-dir plugin
+```
+
+Then type `/blind` to hear the current settings. Tip: if you use NVDA, choose the voice named "NVDA Sapi" with `/voice nvda` to hear Blind Claude in your NVDA voice.
+
+## Checking and testing
+
+1. `claude plugin validate plugin` checks the mod the way Claude Code loads it.
+2. `claude plugin test plugin` runs the tests.
 
 ## Documentation
 
@@ -28,15 +51,17 @@ Planning. The documentation describes what will be built. No code has been writt
 
 ## Quick look at the commands
 
-These are planned and may change.
+These work now, apart from the ones marked as planned in the commands document.
 
 1. `/speak all`, `/speak most`, `/speak some`, `/speak none`: choose how much is spoken.
 2. `/speak stop`: stop talking right now.
 3. `/speak repeat`: say the last reply again.
 4. `/voice`: list the installed voices.
 5. `/voice 3` or `/voice Zira`: choose a voice.
-6. `/clean on` or `/clean off`: turn symbol cleaning on or off.
-7. `/blind`: hear a summary of all current settings.
+6. `/rate` and `/volume`: speed and loudness.
+7. `/clean on`, `/clean off` or `/clean words`: symbol cleaning.
+8. `/sounds on`, `/sounds off` or `/sounds test`: the done sound.
+9. `/blind`: hear a summary of all current settings. `/blind help` lists every command.
 
 ## Platform
 

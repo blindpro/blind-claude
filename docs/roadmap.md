@@ -2,6 +2,8 @@
 
 The order the work will be done in. Each step should be usable on its own before the next one starts.
 
+Progress as of version 0.1.0: steps 1 to 4 are done. Step 5 is partly done: the quiet status line and the done sound work; plain tool rows, diffs, the other sound cues and notifications do not yet. Pause and resume from step 3 are not built.
+
 ## Step 1: Skeleton
 
 1. Create the plugin folder, manifest and hooks module.
@@ -54,6 +56,6 @@ The order the work will be done in. Each step should be usable on its own before
 ## Open questions
 
 1. Can a mod bind a key that works while the prompt has focus? This decides how stop speech works.
-2. Does Claude Code's built in `$.audio.speak` work on Windows, and with which voices?
-3. Does Claude Code's `$.audio.play` play sounds in Windows Terminal, or must sounds go through PowerShell?
+2. Answered: Claude Code's `$.audio.play` does not play sounds on Windows, so sounds go through the PowerShell speech server, as WAV files.
+3. Answered: the Windows SAPI voice list includes "NVDA Sapi" when NVDA is installed, which speaks through NVDA. This may make the NVDA controller client unnecessary.
 4. How does NVDA react to the rewritten rows? Does it read them once, or again on every redraw?

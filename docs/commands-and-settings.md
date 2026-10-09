@@ -16,7 +16,7 @@ Every Blind Claude slash command and setting in one place. All settings are save
 2. `/speak all`, `/speak most`, `/speak some`, `/speak none`: set the speech level.
 3. `/speak stop`: stop speaking and clear the queue.
 4. `/speak repeat`: say the last spoken reply again.
-5. `/speak pause` and `/speak resume`: pause and continue, where the engine supports it.
+5. `/speak pause` and `/speak resume`: planned, not built yet.
 
 ### Voice
 
@@ -36,7 +36,8 @@ Every Blind Claude slash command and setting in one place. All settings are save
 ### Sounds and notifications
 
 1. `/sounds on` or `/sounds off`: turn sound cues on or off. Default on.
-2. `/notify on` or `/notify off`: turn Windows notifications on or off. Default off.
+2. `/sounds test`: play a done sound.
+3. `/notify on` or `/notify off`: planned, not built yet.
 
 ## Settings and defaults
 
@@ -46,12 +47,9 @@ Every Blind Claude slash command and setting in one place. All settings are save
 4. Volume: 100.
 5. Cleaning: on.
 6. Sounds: on.
-7. Notifications: off.
-8. Working update interval: 30 seconds. 0 turns the updates off.
-9. Speak what the screen reader reads: on. When off, Blind Claude speaks only things the screen reader would not, plus permission requests.
+7. Notifications, the working update interval, and the screen reader overlap setting are planned, not built yet.
 
 ## Where settings live
 
 1. Settings changed by slash command are saved in Claude Code's plugin store and apply in every project.
-2. The main settings are also listed in Claude Code's `/config` menu, through the plugin manifest's `userConfig` fields.
-3. If both are set, the slash command value wins, since it is the most recent choice.
+2. Planned: listing the main settings in Claude Code's `/config` menu as well.

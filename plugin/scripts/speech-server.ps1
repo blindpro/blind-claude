@@ -37,6 +37,12 @@ try {
 }
 
 New-Item -ItemType Directory -Force -Path $Spool | Out-Null
+
+# Remove spool folders left behind by sessions that ended more than a day ago.
+$spoolParent = Split-Path -Parent $Spool
+Get-ChildItem -Path $spoolParent -Directory -ErrorAction SilentlyContinue |
+    Where-Object { $_.FullName -ne $Spool -and $_.LastWriteTime -lt (Get-Date).AddDays(-1) } |
+    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
 Get-ChildItem -Path $Spool -Filter *.json -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
 
 # Keeps a reference to the player so a sound is not cut off by garbage collection.

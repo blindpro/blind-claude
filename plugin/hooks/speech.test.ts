@@ -1,7 +1,11 @@
 import { expect, test } from 'claude-code/testing'
 
 import {
+  MAX_SERVER_STARTS,
+  SERVER_START_WINDOW_MS,
+  describeExit,
   describeToolCall,
+  mayStartServer,
   findVoice,
   formatDuration,
   parseVoices,
@@ -55,4 +59,21 @@ test('formats durations in words', () => {
   expect(formatDuration(45_000)).toBe('45 seconds')
   expect(formatDuration(60_000)).toBe('1 minute')
   expect(formatDuration(125_000)).toBe('2 minutes 5 seconds')
+})
+
+test('limits how often the speech server is started', () => {
+  const now = 10 * SERVER_START_WINDOW_MS
+  expect(mayStartServer([], now)).toBe(true)
+  const recent = Array.from({ length: MAX_SERVER_STARTS }, (_, i) => now - i * 1000)
+  expect(mayStartServer(recent, now)).toBe(false)
+  const old = recent.map(at => at - SERVER_START_WINDOW_MS)
+  expect(mayStartServer(old, now)).toBe(true)
+})
+
+test('says why the speech server ended', () => {
+  expect(describeExit(0, 'Claude Code closed', '')).toBe('Claude Code closed')
+  expect(describeExit(1, '', 'first\nAccess denied\n')).toBe('Access denied')
+  expect(describeExit(0, '', '')).toBe('it exited without saying why')
+  expect(describeExit(1, '', '')).toContain('code 1')
+  expect(describeExit(null, '', '')).toBe('it was ended from outside')
 })

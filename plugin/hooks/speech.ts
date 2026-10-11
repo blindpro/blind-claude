@@ -129,6 +129,29 @@ export function spoolName(now: number, seq: number): string {
   return `${String(Math.floor(now)).padStart(15, '0')}-${String(seq).padStart(6, '0')}.json`
 }
 
+// The speech server is started again whenever it is needed, but not more
+// than this many times in this window, so a server that cannot run does not
+// start over and over.
+export const MAX_SERVER_STARTS = 5
+export const SERVER_START_WINDOW_MS = 5 * 60_000
+
+// Whether the server may be started now, given when it was started before.
+export function mayStartServer(starts: readonly number[], now: number): boolean {
+  return starts.filter(at => now - at < SERVER_START_WINDOW_MS).length < MAX_SERVER_STARTS
+}
+
+// Why the speech server ended, in words: the reason it gave itself on a
+// STOP line, else the last line it wrote to standard error, else its exit code.
+export function describeExit(code: number | null, stopReason: string, errors: string): string {
+  if (stopReason !== '') return stopReason
+  const lastError = errors.trim().split('\n').pop()?.trim() ?? ''
+  if (lastError !== '') return lastError
+  if (code === null) return 'it was ended from outside'
+  if (code === 0) return 'it exited without saying why'
+
+  return `it ended with code ${code}, probably closed by Windows or another program`
+}
+
 export type Voice = { name: string; culture: string; gender: string; current: boolean }
 
 export function parseVoices(json: string): Voice[] {

@@ -6,6 +6,7 @@
 #   READY                 the spool folder exists and commands are accepted
 #   VOICES <json>         answer to a "voices" command
 #   ERROR <text>          something went wrong with one command
+#   STOP <text>           why the server is about to exit
 #
 # Commands:
 #   { "op": "speak", "text": "...", "interrupt": false }
@@ -32,17 +33,21 @@ try {
     $synth = New-Object System.Speech.Synthesis.SpeechSynthesizer
     $synth.SetOutputToDefaultAudioDevice()
 } catch {
-    Send-Line "ERROR speech is not available: $($_.Exception.Message)"
+    Send-Line "STOP speech is not available: $($_.Exception.Message)"
     exit 2
 }
 
 New-Item -ItemType Directory -Force -Path $Spool | Out-Null
 
-# Remove spool folders left behind by sessions that ended more than a day ago.
+# Remove spool folders left behind by sessions that ended more than a day
+# ago. Only ever inside a folder named blind-claude, and only folders named
+# by a number, so a wrong -Spool path cannot remove anything else.
 $spoolParent = Split-Path -Parent $Spool
-Get-ChildItem -Path $spoolParent -Directory -ErrorAction SilentlyContinue |
-    Where-Object { $_.FullName -ne $Spool -and $_.LastWriteTime -lt (Get-Date).AddDays(-1) } |
-    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+if ((Split-Path -Leaf $spoolParent) -eq 'blind-claude') {
+    Get-ChildItem -Path $spoolParent -Directory -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -match '^\d+$' -and $_.FullName -ne $Spool -and $_.LastWriteTime -lt (Get-Date).AddDays(-1) } |
+        Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+}
 Get-ChildItem -Path $Spool -Filter *.json -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
 
 # Keeps a reference to the player so a sound is not cut off by garbage collection.
@@ -94,6 +99,7 @@ function Invoke-SpoolCommand($cmd) {
         }
         'quit' {
             $synth.SpeakAsyncCancelAll()
+            Send-Line 'STOP asked to quit'
             exit 0
         }
         default {
@@ -103,17 +109,47 @@ function Invoke-SpoolCommand($cmd) {
 }
 
 # Claude Code normally ends this process itself. If Claude Code dies
-# without doing so, notice that the parent is gone and exit too.
-$parentId = (Get-CimInstance Win32_Process -Filter "ProcessId = $PID").ParentProcessId
+# without doing so, notice that the parent is gone and exit too. The check
+# must miss twice in a row, so one failed lookup does not end the server.
+$parentId = $null
+try { $parentId = (Get-CimInstance Win32_Process -Filter "ProcessId = $PID").ParentProcessId } catch { }
+$parentStart = $null
+if ($parentId) {
+    try { $parentStart = (Get-Process -Id $parentId -ErrorAction Stop).StartTime } catch { }
+}
 $lastParentCheck = Get-Date
+$parentMisses = 0
+
+function Test-ParentAlive {
+    if (-not $parentId) { return $true }
+    try {
+        $parent = Get-Process -Id $parentId -ErrorAction Stop
+        # A new process that reused the id is not our parent.
+        if ($parentStart -and $parent.StartTime -ne $parentStart) { return $false }
+        return $true
+    } catch [Microsoft.PowerShell.Commands.ProcessCommandException] {
+        return $false
+    } catch {
+        # Could not tell, for example access was denied: assume it lives.
+        return $true
+    }
+}
 
 Send-Line 'READY'
 
 while ($true) {
-    if (-not (Test-Path -LiteralPath $Spool)) { exit 0 }
+    # Something such as a temp folder cleanup removed the spool folder.
+    # Make it again rather than stopping speech.
+    if (-not (Test-Path -LiteralPath $Spool)) {
+        try { New-Item -ItemType Directory -Force -Path $Spool | Out-Null } catch { }
+    }
     if (((Get-Date) - $lastParentCheck).TotalSeconds -gt 5) {
         $lastParentCheck = Get-Date
-        if (-not (Get-Process -Id $parentId -ErrorAction SilentlyContinue)) { exit 0 }
+        if (Test-ParentAlive) { $parentMisses = 0 } else { $parentMisses++ }
+        if ($parentMisses -ge 2) {
+            Send-Line 'STOP Claude Code has closed'
+            exit 0
+        }
     }
     $files = Get-ChildItem -Path $Spool -Filter *.json -ErrorAction SilentlyContinue | Sort-Object Name
     foreach ($file in $files) {

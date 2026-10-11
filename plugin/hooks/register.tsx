@@ -23,10 +23,14 @@ import type { CleanMode, Level, Settings, SoundEvent } from './settings'
 import { SOUNDS_HELP, chooseSound, findSound, isPlayable, isSoundEvent, listText, overviewText, sortSounds } from './sounds'
 import type { SoundFile } from './sounds'
 import {
+  MAX_SERVER_STARTS,
+  SERVER_START_WINDOW_MS,
+  describeExit,
   describeToolCall,
   describeToolResult,
   findVoice,
   formatDuration,
+  mayStartServer,
   parseVoices,
   speaksAlerts,
   speaksFinalAnswer,
@@ -64,27 +68,60 @@ const HELP = [
   '/blind: open the settings menu. Type a number and press Enter to choose; 0 goes back.',
   '/speak, /voices, /rate, /volume, /clean or /sounds on their own open that part of the menu.',
   '/blind status: current settings in one list. /blind reset: back to defaults.',
+  '/blind restart: start the speech server again if speech has stopped.',
 ].join('\n')
 
-// Module state. A hot reload starts these over; settings are read back from the store.
+type Command = Record<string, unknown>
+
+// The Windows speech server. While it starts, commands wait in `queue` and
+// are sent the moment it is ready, so nothing said during startup is lost.
+type Server = {
+  spool: string
+  state: 'starting' | 'ready' | 'stopped'
+  seq: number
+  queue: Command[]
+  ready: Promise<boolean>
+  settle: (isReady: boolean) => void
+}
+
+// Module state. The engine may load the module afresh in the middle of a
+// session (a reload, or its hooks worker replaced), which starts all of
+// these over: settings are then read back from the store, and the speech
+// server is started again the next time something is spoken.
 let current: Settings = { ...DEFAULTS }
+let hasSettings = false
 let lastReply = ''
-let bridge: { spool: string; isReady: boolean; seq: number } | null = null
+let bridge: Server | null = null
+let isWindows: boolean | null = null
+// When the speech server was started, to stop a server that cannot run
+// from being started over and over.
+let serverStarts: number[] = []
 let voicesWaiter: ((json: string) => void) | null = null
 // The settings menu screen open now, or null when the menu is closed.
 let menu: Screen | null = null
 
+async function loadSettings($: Engine): Promise<void> {
+  if (hasSettings) return
+  current = { ...DEFAULTS, ...sanitize(await $.store.get(SETTINGS_KEY)) }
+  hasSettings = true
+}
+
 async function saveSettings($: Engine, change: Partial<Settings>): Promise<void> {
+  await loadSettings($)
   current = { ...current, ...change }
   await $.store.set(SETTINGS_KEY, current)
 }
 
-// Sends one command to the Windows speech server. False when it is not running.
-async function sendToServer($: Engine, command: Record<string, unknown>): Promise<boolean> {
-  if (bridge === null || !bridge.isReady) return false
-  const name = spoolName(await $.clock.now(), bridge.seq++)
+function voiceConfig(): Command[] {
+  const config = { op: 'config', voice: current.voice ?? '', rate: current.rate, volume: current.volume }
+
+  return current.voice === null ? [{ op: 'default-voice' }, config] : [config]
+}
+
+async function writeCommand($: Engine, server: Server, command: Command): Promise<boolean> {
+  const name = spoolName(await $.clock.now(), server.seq++)
   try {
-    await $.fs.write(`${bridge.spool}\\${name}`, JSON.stringify(command))
+    await $.fs.write(`${server.spool}\\${name}`, JSON.stringify(command))
     return true
   } catch (error) {
     $.ui.log(`Blind Claude could not reach the speech server: ${String(error)}`, { to: 'debug' })
@@ -92,9 +129,31 @@ async function sendToServer($: Engine, command: Record<string, unknown>): Promis
   }
 }
 
+// The running or starting speech server, started now if it is not running.
+// Null where there is none: not Windows, or it keeps stopping.
+async function ensureServer($: Engine): Promise<Server | null> {
+  if (isWindows === null) isWindows = (await $.env.get('OS')) === 'Windows_NT'
+  if (!isWindows) return null
+  if (bridge !== null && bridge.state !== 'stopped') return bridge
+  if (!mayStartServer(serverStarts, await $.clock.now())) return null
+
+  return startSpeechServer($)
+}
+
+// Sends one command to the Windows speech server, starting it if need be.
+// False when there is no server to send it to.
+async function sendToServer($: Engine, command: Command): Promise<boolean> {
+  const server = await ensureServer($)
+  if (server === null) return false
+  if (server.state === 'ready') return writeCommand($, server, command)
+  server.queue.push(command)
+  if (server.queue.length > 50) server.queue.shift()
+
+  return true
+}
+
 async function sendVoiceConfig($: Engine): Promise<void> {
-  if (current.voice === null) await sendToServer($, { op: 'default-voice' })
-  await sendToServer($, { op: 'config', voice: current.voice ?? '', rate: current.rate, volume: current.volume })
+  for (const command of voiceConfig()) await sendToServer($, command)
 }
 
 // Speaks text through the speech server, or Claude Code's own speech where
@@ -167,32 +226,47 @@ async function runSoundScript($: Engine, args: string[]): Promise<string> {
 }
 
 async function requestVoices($: Engine): Promise<Voice[] | null> {
-  if (bridge === null || !bridge.isReady) return null
+  const server = await ensureServer($)
+  if (server === null) return null
+  // A server that is still starting gets a few seconds to finish.
+  if (server.state === 'starting') {
+    const isReady = await Promise.race([server.ready, $.clock.sleep(4000).then(() => false)])
+    if (!isReady) return null
+  }
   const answer = new Promise<string>(resolve => {
     voicesWaiter = resolve
   })
   if (!(await sendToServer($, { op: 'voices' }))) return null
-  const timeout = $.clock.sleep(5000).then(() => null)
+  const timeout = $.clock.sleep(4000).then(() => null)
   const json = await Promise.race([answer, timeout])
   voicesWaiter = null
 
   return json === null ? null : parseVoices(json)
 }
 
-// Starts the speech server for this session. It runs until the session ends
-// or the mod reloads, and is restarted by the next session.start. If it dies
-// on its own, the person is told why and it is started again, once.
-async function startSpeechServer($: Engine, isRetry = false): Promise<void> {
+// Starts the speech server. It runs until the session ends or the module is
+// unloaded. If it stops on its own it is started again straight away, up to
+// MAX_SERVER_STARTS times in a few minutes; past that the person is told,
+// and /blind restart tries again.
+async function startSpeechServer($: Engine): Promise<Server | null> {
   const temp = (await $.env.get('TEMP')) ?? (await $.env.get('TMP'))
-  if (!temp) return
-  const spool = `${temp}\\blind-claude\\${Math.floor(await $.clock.now())}`
-  const server = { spool, isReady: false, seq: 0 }
+  if (!temp) return null
+  const now = await $.clock.now()
+  serverStarts = [...serverStarts.filter(at => now - at < SERVER_START_WINDOW_MS), now]
+  let settle: (isReady: boolean) => void = () => undefined
+  const ready = new Promise<boolean>(resolve => {
+    settle = resolve
+  })
+  const spool = `${temp}\\blind-claude\\${Math.floor(now)}`
+  const server: Server = { spool, state: 'starting', seq: 0, queue: voiceConfig(), ready, settle }
   bridge = server
   const script = `${$.plugin.root}\\scripts\\speech-server.ps1`
 
   void (async () => {
     let pending = ''
     let errors = ''
+    let stopReason = ''
+    let code: number | null = null
     try {
       const child = $.process.spawn({
         argv: ['powershell.exe', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script, '-Spool', spool],
@@ -207,29 +281,46 @@ async function startSpeechServer($: Engine, isRetry = false): Promise<void> {
           pending = pending.slice(end + 1)
           end = pending.indexOf('\n')
           if (line === 'READY') {
-            server.isReady = true
-            await sendVoiceConfig($)
+            server.state = 'ready'
+            const queued = server.queue
+            server.queue = []
+            for (const command of queued) await writeCommand($, server, command)
+            server.settle(true)
           } else if (line.startsWith('VOICES ')) {
             voicesWaiter?.(line.slice('VOICES '.length))
+          } else if (line.startsWith('STOP ')) {
+            stopReason = line.slice('STOP '.length)
           } else if (line.startsWith('ERROR ')) {
             $.ui.log(`Blind Claude speech: ${line.slice('ERROR '.length)}`)
           }
         }
       }
+      code = (await child.result).code
     } catch (error) {
       errors = `${errors}\n${String(error)}`
     }
-    server.isReady = false
-    // A newer server replaced this one (a reload), so its end is expected.
+    server.state = 'stopped'
+    server.settle(false)
+    // A newer server replaced this one, so its end is expected.
     if (bridge !== server) return
-    const reason = errors.trim().split('\n').pop()?.trim() || 'no reason given'
-    $.ui.log(`Blind Claude speech server stopped: ${reason}${isRetry ? '' : ' Starting it again.'}`)
-    if (!isRetry) await startSpeechServer($, true)
+    const reason = describeExit(code, stopReason, errors)
+    if (mayStartServer(serverStarts, await $.clock.now())) {
+      $.ui.log(`Blind Claude speech server stopped (${reason}). Starting it again.`, { to: 'debug' })
+      await startSpeechServer($)
+    } else {
+      $.ui.log(`Blind Claude speech server stopped (${reason}). It stopped ${MAX_SERVER_STARTS} times in a few minutes, so speech is off for now. Type /blind restart to try again.`)
+    }
   })()
+
+  return server
 }
 
 function engineName(): string {
-  return bridge?.isReady ? 'Windows speech server' : 'Claude Code built in speech'
+  if (isWindows === false) return 'Claude Code built in speech'
+  if (bridge?.state === 'ready') return 'Windows speech server'
+  if (bridge?.state === 'starting') return 'Windows speech server, starting'
+
+  return 'Windows speech server, stopped. Type /blind restart to start it'
 }
 
 // Fetches only what the screen needs: voices for the voice list (and for
@@ -289,7 +380,8 @@ const commandFailed = () => ({ text: 'That Blind Claude command failed. Type /bl
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const started = await next(e)
-    current = { ...DEFAULTS, ...sanitize(await $.store.get(SETTINGS_KEY)) }
+    hasSettings = false
+    await loadSettings($)
 
     const commands = [
       { name: 'speak', description: 'Blind Claude: set how much is spoken, or stop and repeat speech', argumentHint: '[all|most|some|none|stop|repeat]' },
@@ -298,7 +390,7 @@ export const register: Register = on => {
       { name: 'volume', description: 'Blind Claude: set the speech volume', argumentHint: '[0 to 100]' },
       { name: 'clean', description: 'Blind Claude: turn symbol cleaning on, off, or words', argumentHint: '[on|off|words]' },
       { name: 'sounds', description: 'Blind Claude: list, play, pick, add and remove sound cues', argumentHint: '[help|status|on|off|list|play|pick|add|remove|folder]' },
-      { name: 'blind', description: 'Blind Claude: open the settings menu, show status or help, or reset', argumentHint: '[help|status|reset]' },
+      { name: 'blind', description: 'Blind Claude: open the settings menu, show status or help, reset, or restart speech', argumentHint: '[help|status|reset|restart]' },
     ]
     // Claude Code refuses a name one of its own commands uses, and some exist
     // only in interactive sessions. One refusal must not stop the others.
@@ -310,13 +402,15 @@ export const register: Register = on => {
       }
     }
 
-    if ((await $.env.get('OS')) === 'Windows_NT') await startSpeechServer($)
+    // Started now so the first reply is not kept waiting for it.
+    await ensureServer($)
 
     return started
   })
 
   // Clean output, layer one: ask Claude to write plainly.
   on('prompt.compose', async ($, e, next) => {
+    await loadSettings($)
     const composed = await next(e)
     if (current.clean === 'off') return composed
 
@@ -363,6 +457,7 @@ export const register: Register = on => {
   // is open, a number typed at the prompt answers the menu and never reaches
   // Claude; anything else closes the menu and goes to Claude as usual.
   on('prompt.submit', async ($, e, next) => {
+    await loadSettings($)
     await stopSpeech($)
     if (menu !== null) {
       const isPerson = e.origin.kind === 'composer' || e.origin.kind === 'bridge'
@@ -383,6 +478,7 @@ export const register: Register = on => {
 
   // Reply text as it arrives, at the "all" and "most" levels.
   on('session.append', async ($, e, next) => {
+    await loadSettings($)
     const appended = await next(e)
     const isMainReply = e.door === 'response' && e.agentId === undefined && e.message.type === 'assistant'
     if (isMainReply && speaksReplyBlocks(current.level)) {
@@ -397,6 +493,7 @@ export const register: Register = on => {
   }).catch(($, e, next) => next(e))
 
   on('tool.call', async ($, e, next) => {
+    await loadSettings($)
     const isMain = e.agentId === undefined
     if (isMain && speaksToolCall(current.level, e.tool)) await speak($, describeToolCall(e.tool, e), { isRaw: true })
     const ran = await next(e)
@@ -408,6 +505,7 @@ export const register: Register = on => {
   }).catch(($, e, next) => next(e))
 
   on('turn.start', async ($, e, next) => {
+    await loadSettings($)
     const started = await next(e)
     await playSound($, 'start')
 
@@ -416,6 +514,7 @@ export const register: Register = on => {
 
   // Permission requests and questions from Claude Code.
   on('classic.Notification', async ($, e, next) => {
+    await loadSettings($)
     if (!/idle/i.test(e.notification_type)) {
       await playSound($, 'attention')
       if (speaksAlerts(current.level)) await speak($, e.message, { interrupt: false })
@@ -425,6 +524,7 @@ export const register: Register = on => {
   }).catch(($, e, next) => next(e))
 
   on('turn.complete', async ($, e, next) => {
+    await loadSettings($)
     const result = await next(e)
     if (e.agentId !== undefined) return result
 
@@ -440,9 +540,10 @@ export const register: Register = on => {
     }
 
     return result
-  })
+  }).catch(($, e, next) => next(e))
 
   on('command.run', { command: 'speak' }, async ($, e) => {
+    await loadSettings($)
     const [choice] = word(e.args)
     if (choice === '') return { text: await showScreen($, { kind: 'level' }) }
     if (choice === 'stop') {
@@ -465,6 +566,7 @@ export const register: Register = on => {
   }).catch(commandFailed)
 
   on('command.run', { command: 'voices' }, async ($, e) => {
+    await loadSettings($)
     const [first, rest] = word(e.args)
     if (first === 'default') {
       await saveSettings($, { voice: null })
@@ -501,6 +603,7 @@ export const register: Register = on => {
   }).catch(commandFailed)
 
   on('command.run', { command: 'rate' }, async ($, e) => {
+    await loadSettings($)
     const [choice] = word(e.args)
     if (choice === '') return { text: await showScreen($, { kind: 'rate' }) }
     let rate = current.rate
@@ -516,6 +619,7 @@ export const register: Register = on => {
   }).catch(commandFailed)
 
   on('command.run', { command: 'volume' }, async ($, e) => {
+    await loadSettings($)
     const [choice] = word(e.args)
     if (choice === '') return { text: await showScreen($, { kind: 'volume' }) }
     if (!/^\d+$/.test(choice)) return { text: 'Use a number from 0 to 100.' }
@@ -527,6 +631,7 @@ export const register: Register = on => {
   }).catch(commandFailed)
 
   on('command.run', { command: 'clean' }, async ($, e) => {
+    await loadSettings($)
     const [choice] = word(e.args)
     if (choice === '') return { text: await showScreen($, { kind: 'clean' }) }
     if (!CLEAN_MODES.includes(choice as CleanMode)) return { text: 'Use on, off or words.' }
@@ -537,6 +642,7 @@ export const register: Register = on => {
   }).catch(commandFailed)
 
   on('command.run', { command: 'sounds' }, async ($, e) => {
+    await loadSettings($)
     const parts = e.args.trim().split(/\s+/).filter(part => part !== '')
     const [first = '', second = '', ...rest] = parts
     const action = first.toLowerCase()
@@ -634,11 +740,25 @@ export const register: Register = on => {
   }).catch(commandFailed)
 
   on('command.run', { command: 'blind' }, async ($, e) => {
+    await loadSettings($)
     const [choice] = word(e.args)
     if (choice === 'help') return { text: HELP }
     if (choice === 'reset') {
       await resetSettings($)
       return { text: RESET_MESSAGE }
+    }
+    if (choice === 'restart') {
+      const old = bridge
+      serverStarts = []
+      bridge = null
+      if (old?.state === 'ready') await writeCommand($, old, { op: 'quit' })
+      else old?.queue.push({ op: 'quit' })
+      const server = await ensureServer($)
+      if (server === null) return { text: 'The speech server only runs on Windows.' }
+      const isReady = await Promise.race([server.ready, $.clock.sleep(8000).then(() => false)])
+      if (!isReady) return { text: 'The speech server is still starting, or could not start. Type /blind status to check.' }
+      await speak($, 'Speech restarted.', { interrupt: true, isRaw: true })
+      return { text: 'Speech server restarted.' }
     }
     if (choice === 'status') {
       const summary = `${describeSettings(current)}\nSpeech engine: ${engineName()}.\nType /blind help for all commands.`

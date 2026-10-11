@@ -66,7 +66,11 @@ function Invoke-SpoolCommand($cmd) {
             if ($null -ne $cmd.volume) { $synth.Volume = [Math]::Max(0, [Math]::Min(100, [int]$cmd.volume)) }
         }
         'default-voice' {
-            $first = $synth.GetInstalledVoices() | Where-Object { $_.Enabled } | Select-Object -First 1
+            # Screen reader bridge voices such as "NVDA Sapi" report success
+            # but make no sound here, so prefer a voice that really speaks.
+            $enabled = @($synth.GetInstalledVoices() | Where-Object { $_.Enabled })
+            $real = $enabled | Where-Object { $_.VoiceInfo.Name -notmatch '^(NVDA|JAWS)' } | Select-Object -First 1
+            $first = if ($real) { $real } else { $enabled | Select-Object -First 1 }
             if ($first) { $synth.SelectVoice($first.VoiceInfo.Name) }
         }
         'play' {

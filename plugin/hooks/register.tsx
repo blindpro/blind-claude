@@ -180,8 +180,9 @@ async function requestVoices($: Engine): Promise<Voice[] | null> {
 }
 
 // Starts the speech server for this session. It runs until the session ends
-// or the mod reloads, and is restarted by the next session.start.
-async function startSpeechServer($: Engine): Promise<void> {
+// or the mod reloads, and is restarted by the next session.start. If it dies
+// on its own, the person is told why and it is started again, once.
+async function startSpeechServer($: Engine, isRetry = false): Promise<void> {
   const temp = (await $.env.get('TEMP')) ?? (await $.env.get('TMP'))
   if (!temp) return
   const spool = `${temp}\\blind-claude\\${Math.floor(await $.clock.now())}`
@@ -191,11 +192,13 @@ async function startSpeechServer($: Engine): Promise<void> {
 
   void (async () => {
     let pending = ''
+    let errors = ''
     try {
       const child = $.process.spawn({
         argv: ['powershell.exe', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script, '-Spool', spool],
       })
       for await (const chunk of child) {
+        if (chunk.stream === 'stderr') errors = (errors + chunk.text).slice(-2000)
         if (chunk.stream !== 'stdout') continue
         pending += chunk.text
         let end = pending.indexOf('\n')
@@ -214,9 +217,14 @@ async function startSpeechServer($: Engine): Promise<void> {
         }
       }
     } catch (error) {
-      $.ui.log(`Blind Claude speech server stopped: ${String(error)}`, { to: 'debug' })
+      errors = `${errors}\n${String(error)}`
     }
     server.isReady = false
+    // A newer server replaced this one (a reload), so its end is expected.
+    if (bridge !== server) return
+    const reason = errors.trim().split('\n').pop()?.trim() || 'no reason given'
+    $.ui.log(`Blind Claude speech server stopped: ${reason}${isRetry ? '' : ' Starting it again.'}`)
+    if (!isRetry) await startSpeechServer($, true)
   })()
 }
 
@@ -317,6 +325,20 @@ export const register: Register = on => {
 
   // Clean output, layer two: clean each reply before it is drawn.
   on('ui.render', { component: 'AssistantMessage' }, ($, e, next) => {
+    if (current.clean === 'off') return next(e)
+
+    return next({ ...e, props: { ...e.props, text: cleanForDisplay(e.props.text, current.clean) } })
+  })
+
+  // The same cleaning for what slash commands print, built in ones such as
+  // /cost and /context included, and for the notices under the logo.
+  on('ui.render', { component: 'CommandOutput' }, ($, e, next) => {
+    if (current.clean === 'off') return next(e)
+
+    return next({ ...e, props: { ...e.props, text: cleanForDisplay(e.props.text, current.clean) } })
+  })
+
+  on('ui.render', { component: 'InfoNotice' }, ($, e, next) => {
     if (current.clean === 'off') return next(e)
 
     return next({ ...e, props: { ...e.props, text: cleanForDisplay(e.props.text, current.clean) } })

@@ -78,13 +78,15 @@ Windows ships with speech voices that can be reached from PowerShell through the
 
 Keeping one process running avoids the delay of starting PowerShell for every sentence.
 
+The server is started when the session starts, and again whenever something needs to be said and it is not running, for example after Claude Code reloaded the mod. Anything said while it is starting waits and is spoken once it is ready, rather than being lost. If it stops on its own it is started again straight away, and the reason goes to the debug log. If it stops five times within five minutes, Blind Claude stops trying, says so once in the transcript with the reason, and `/blind restart` tries again.
+
 ### Windows: OneCore voices
 
 The newer, more natural Windows voices, the ones listed in Settings under Time and language, Speech, are not always visible to `System.Speech`. A later release will reach them through the Windows Runtime speech API from the same PowerShell process. Until then, Blind Claude lists only the voices SAPI can see, and the voices document explains how to make more voices visible.
 
 ### Claude Code's built in speech
 
-Claude Code offers `$.audio.speak`, which uses the platform's own synthesizer. On macOS this is the `say` command. Blind Claude uses it on macOS and as a fallback wherever it works. It supports choosing a voice by name but not rate, volume or stopping mid sentence, so it is not the first choice on Windows.
+Claude Code offers `$.audio.speak`, which uses the platform's own synthesizer. On macOS this is the `say` command. Blind Claude uses it on macOS and Linux. On Windows Claude Code has no synthesizer of its own, so it is no fallback there: Windows speech depends on the PowerShell server. It supports choosing a voice by name but not rate, volume or stopping mid sentence.
 
 ### Linux
 

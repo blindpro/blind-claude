@@ -72,7 +72,7 @@ These work now, apart from the ones marked as planned in the commands document.
 6. `/rate` and `/volume`: speed and loudness.
 7. `/clean on`, `/clean off` or `/clean words`: symbol cleaning.
 8. `/sounds`: sound cues. `/sounds help` lists the sound commands.
-9. `/blind`: open the settings menu. Type a number and press Enter to pick a setting, then a number for its choice. 0 goes back. `/blind status` reads every setting in one list, and `/blind help` lists every command.
+9. `/blind`: open the settings menu. Type a number and press Enter to pick a setting, then a number for its choice. 0 goes back. `/blind status` reads every setting in one list, `/blind help` lists every command, and `/blind restart` starts speech again if it has stopped.
 
 ## Platform
 

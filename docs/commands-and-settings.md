@@ -42,6 +42,7 @@ The commands below still work with words after them, for when you already know w
 2. `/blind status`: print and speak a summary of all current settings, including which speech engine is in use.
 3. `/blind help`: list every command with a one line description.
 4. `/blind reset`: put every setting back to its default.
+5. `/blind restart`: start the Windows speech server again. Rarely needed, since it restarts by itself; use it after the transcript says speech is off because the server kept stopping.
 
 ### Speech
 

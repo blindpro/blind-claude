@@ -594,7 +594,7 @@ async function askDialog($: Engine, dialog: Dialog, signal: AbortSignal, isNew: 
   answerPath = path
   await update($, dialogState, () => dialog)
   if (!isDialogOpen) {
-    const rows = dialog.lines.length + dialog.options.length + (dialog.input ? 2 : 0) + 2
+    const rows = 1 + dialog.lines.length + dialog.options.length + (dialog.input ? 2 : 0) + 2
     const opened = await $.ui.open({ id: DIALOG_PANE, title: 'Blind Claude', focus: true, closeOnEscape: true, holdToasts: true, rows })
     isDialogOpen = true
     if (!opened.isPlaced) {

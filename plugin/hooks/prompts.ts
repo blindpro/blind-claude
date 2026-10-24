@@ -164,7 +164,8 @@ export function parseQuestions(input: unknown): Question[] | null {
 export function questionDialog(id: string, questions: readonly Question[], index: number, selected: ReadonlySet<number>): Dialog {
   const q = questions[index]!
   const header = q.header ? `, ${q.header}` : ''
-  const title = questions.length > 1 ? `Question ${index + 1} of ${questions.length}${header}.` : `Claude has a question${header}.`
+  // The question is in the title, so the stop at the top shows and says it.
+  const title = `${questions.length > 1 ? `Question ${index + 1} of ${questions.length}${header}.` : `Claude has a question${header}.`} ${q.question}`
   const label = (o: Question['options'][number]) => (o.description ? `${o.label}: ${o.description}` : o.label)
   const options = q.multiSelect
     ? [
@@ -175,7 +176,7 @@ export function questionDialog(id: string, questions: readonly Question[], index
   options.push({ key: 'engine', label: "Show Claude Code's own question instead" })
   const hint = q.multiSelect ? 'Choose as many as apply. Pressing a choice turns it on or off.' : ''
 
-  return { id, title, lines: [q.question, ...(hint ? [hint] : [])], options: numbered(options), input: { label: INPUT_QUESTION } }
+  return { id, title, lines: hint ? [hint] : [], options: numbered(options), input: { label: INPUT_QUESTION } }
 }
 
 // What is spoken when a dialog opens: the question and every choice.

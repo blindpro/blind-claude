@@ -40,8 +40,9 @@ const QUESTIONS = parseQuestions({
 
 test('a question lists each choice with its description', () => {
   const dialog = questionDialog('q', QUESTIONS, 0, new Set())
-  expect(dialog.title).toBe('Question 1 of 2, Database.')
-  expect(dialog.lines).toEqual(['Which database?'])
+  expect(dialog.title).toBe('Question 1 of 2, Database. Which database?')
+  expect(dialog.lines).toEqual([])
+  expect(questionSpeech(dialog)).toContain('Question 1 of 2, Database. Which database?')
   expect(dialog.options.map(o => o.label)).toEqual(['SQLite: One file, no server', 'Postgres', "Show Claude Code's own question instead"])
   expect(dialogSpeech(dialog)).toContain('3 choices: 1, SQLite: One file, no server. 2, Postgres.')
 })

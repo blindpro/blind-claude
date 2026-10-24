@@ -10,7 +10,7 @@ Claude Code asks before it runs a command or edits a file, and Claude sometimes 
 
 A dialog above the prompt, laid out to be read from the top:
 
-1. The title, such as "Permission needed." or "Claude has a question, Database."
+1. The title, such as "Permission needed." For a question, the title holds the question itself, such as "Claude has a question, Database. Which database should we use?", so the stop at the top shows and says it.
 2. What is being asked, in plain sentences, one per line. For a command: "Claude wants to run a command.", what it does, then the command itself, one line per line of the command, so nothing is hidden. For an edit: the file, and a summary of the change, such as "Edited a.ts, line 4: 1 line changed."
 3. The question, such as "Allow it?"
 4. The choices, one per line, numbered, with no symbols.

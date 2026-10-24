@@ -4,9 +4,27 @@
 // engine handle may not be passed into imported files. The imported files
 // hold the pure logic: cleaning text, describing tools, settings.
 
+import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
+import type { Dialog, FileChange } from '../types'
 import { cleanForDisplay, cleanForSpeech } from './clean'
+import {
+  applyEdit,
+  changeFromResult,
+  diffTexts,
+  filesOf,
+  firstChangedLine,
+  parseGitDiff,
+  relativePath,
+  reportHtml,
+  reportText,
+  rowText,
+  summary,
+} from './diff'
+import type { ReportOptions } from './diff'
+import { ENGINE_ONLY_TOOLS, allowKey, answerOf, dialogSpeech, parseQuestions, permissionDialog, questionDialog } from './prompts'
+import type { Question } from './prompts'
 import { RESET_MESSAGE, choose, parseChoice, screenText } from './menu'
 import type { MenuContext, Screen } from './menu'
 import {
@@ -18,6 +36,7 @@ import {
   SETTINGS_KEY,
   clamp,
   describeSettings,
+  editorName,
   sanitize,
 } from './settings'
 import type { CleanMode, Level, Settings, SoundEvent, SpeechEngine } from './settings'
@@ -73,7 +92,35 @@ const HELP = [
   '/blind status: current settings in one list. /blind reset: back to defaults.',
   '/blind restart: start the speech server again if speech has stopped.',
   '/usage and /context are answered in plain sentences while symbol cleaning is on.',
+  '/changes: open what Claude changed in the last turn in Notepad++ or Notepad. /changes help for more.',
+  "/blind prompts on or off: permission prompts and Claude's questions in Blind Claude's dialog, or Claude Code's own.",
 ].join('\n')
+
+const CHANGES_HELP = [
+  'Change report commands:',
+  '/changes: open what Claude changed in the last turn that changed files.',
+  '/changes session: every change in this session.',
+  '/changes and a number: one file from the last turn, such as /changes 2.',
+  '/changes open and a number: open that file itself, at its first change.',
+  '/changes git: every change since the last commit, from git.',
+  '/changes preview: the change waiting for your permission.',
+  '/changes auto on or off: open the report by itself after each turn that changes files.',
+  '/changes before on or off: open the change before you approve an edit.',
+  '/changes editor and auto, notepad++, notepad or the path of a program: which editor opens it.',
+  '/changes view text or browser: a text file, or a web page with a heading for each file and change.',
+  '/changes context and a number from 0 to 5: unchanged lines shown around each change.',
+  '/changes rows full or summary: what edits show in the transcript.',
+  '/changes settings: the changes menu.',
+].join('\n')
+
+// The pane the accessible dialog is drawn in.
+const DIALOG_PANE = 'blind-dialog'
+
+// Session state the engine keeps across a reload of the mod: every change
+// made this session, the turn count, and what the dialog pane shows.
+const changesState = atom({ plugin: 'blind-claude', key: 'changes' } as const, [] as FileChange[], { shape: 'changes-1' })
+const turnState = atom({ plugin: 'blind-claude', key: 'turn' } as const, 0)
+const dialogState = atom({ plugin: 'blind-claude', key: 'dialog' } as const, null as Dialog | null, { shape: 'dialog-1' })
 
 type Command = Record<string, unknown>
 
@@ -106,6 +153,19 @@ let engineNow = ''
 let engineWaiter: (() => void) | null = null
 // The settings menu screen open now, or null when the menu is closed.
 let menu: Screen | null = null
+// The session's working folder, so reports can show paths inside it short.
+let cwd = ''
+// The change each pending Edit or Write would make, by its call, worked out
+// before it runs, and the latest one, for /changes preview.
+const previews = new Map<string, FileChange>()
+let lastPreview: FileChange | null = null
+// What "allow for the rest of this session" allowed (see allowKey).
+const allowedThisSession = new Set<string>()
+// The file the open dialog's answer is written into, and whether its pane is open.
+let answerPath: string | null = null
+let isDialogOpen = false
+// One dialog at a time: the next waits for the one before to be answered.
+let dialogQueue: Promise<unknown> = Promise.resolve()
 
 async function loadSettings($: Engine): Promise<void> {
   if (hasSettings) return
@@ -386,6 +446,11 @@ async function answerMenu($: Engine, screen: Screen, choice: number): Promise<st
     return 'Settings menu closed.'
   }
   if (answer.kind === 'open') return showScreen($, answer.screen, answer.message)
+  if (answer.kind === 'changes-report') {
+    const changes = await lastTurnChanges($)
+    const message = changes.length === 0 ? 'Claude has not changed any files in this session yet.' : await openReport($, changes, 'Blind Claude change report for the last turn that changed files.')
+    return showScreen($, screen, message)
+  }
   if (answer.kind === 'reset') {
     await resetSettings($)
     return showScreen($, answer.screen, RESET_MESSAGE)
@@ -394,6 +459,230 @@ async function answerMenu($: Engine, screen: Screen, choice: number): Promise<st
   if (answer.play) await playFile($, answer.play)
 
   return showScreen($, answer.screen, answer.message)
+}
+
+// Runs open-changes.ps1. Answers the editor's name and the path opened,
+// or the error in words.
+async function openInEditor($: Engine, path: string, options: { editor: string; line?: number; isReport?: boolean }): Promise<{ editor: string; path: string } | { error: string }> {
+  const script = `${$.plugin.root}\\scripts\\open-changes.ps1`
+  const args = ['-Path', path, '-Editor', options.editor, ...(options.line ? ['-Line', String(options.line)] : []), ...(options.isReport ? ['-Report'] : [])]
+  try {
+    const ran = await $.process.run(['powershell.exe', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script, ...args], { timeoutMs: 30_000 })
+    const line = ran.stdout.trim().split('\n').pop()?.trim() ?? ''
+    if (line.startsWith('OK ')) {
+      const [editor = 'the editor', opened = path] = line.slice(3).split('|')
+      return { editor, path: opened }
+    }
+    return { error: line.replace(/^ERROR /, '') || ran.stderr.trim() || 'unknown error' }
+  } catch (error) {
+    return { error: String(error) }
+  }
+}
+
+// Writes a change report and opens it. Answers what to tell the person.
+async function openReport($: Engine, changes: readonly FileChange[], title: string, footer?: string[]): Promise<string> {
+  const base = (await $.env.get('LOCALAPPDATA')) ?? (await $.env.get('APPDATA'))
+  if (!base) return 'Could not find your local app data folder to save the change report in.'
+  const isPage = current.changes.view === 'browser'
+  const options: ReportOptions = { title, cwd, context: current.changes.context, ...(footer ? { footer } : {}) }
+  const path = `${base}\\BlindClaude\\changes\\report-${Math.floor(await $.clock.now())}.${isPage ? 'html' : 'txt'}`
+  await $.fs.write(path, isPage ? reportHtml(changes, options) : reportText(changes, options))
+  const opened = await openInEditor($, path, { editor: isPage ? 'browser' : current.changes.editor, isReport: true })
+  if ('error' in opened) return `Could not open the change report: ${opened.error}. It is saved at ${path}.`
+  const files = filesOf(changes).length
+
+  return `The change report opened in ${opened.editor}. It covers ${files === 1 ? '1 file' : `${files} files`}. If you do not hear it, press Alt Tab to reach it.`
+}
+
+async function sessionChanges($: Engine): Promise<FileChange[]> {
+  return (await read($, changesState)) ?? []
+}
+
+// The changes of the last turn that changed files.
+async function lastTurnChanges($: Engine): Promise<FileChange[]> {
+  const all = await sessionChanges($)
+  const last = all[all.length - 1]
+
+  return last === undefined ? [] : all.filter(c => c.turn === last.turn)
+}
+
+function inputField(input: unknown, key: string): string | undefined {
+  if (typeof input !== 'object' || input === null) return undefined
+  const value = (input as Record<string, unknown>)[key]
+
+  return typeof value === 'string' ? value : undefined
+}
+
+// Works out the change an Edit or Write will make, before it runs, so the
+// permission dialog can say it and /changes preview can show it.
+async function preparePreview($: Engine, tool: string, input: unknown, id: string | undefined): Promise<FileChange | null> {
+  const path = inputField(input, 'file_path')
+  if (!path) return null
+  let before: string | null = null
+  try {
+    before = await $.fs.read(path)
+  } catch {
+    before = null
+  }
+  const turn = (await read($, turnState)) ?? 0
+  let preview: FileChange | null = null
+  if (tool === 'Edit') {
+    if (before === null) return null
+    const after = applyEdit(before, inputField(input, 'old_string') ?? '', inputField(input, 'new_string') ?? '', (input as { replace_all?: unknown }).replace_all === true)
+    preview = after === null ? null : diffTexts(path, before, after, turn)
+  } else if (tool === 'Write') {
+    preview = diffTexts(path, before, inputField(input, 'content') ?? '', turn)
+  }
+  if (preview === null) return null
+  lastPreview = preview
+  if (id !== undefined) previews.set(id, preview)
+
+  return preview
+}
+
+// Undoes the escaping wait-answer.ps1 puts on a typed answer's newlines.
+function decodeAnswer(text: string): string {
+  return text.replace(/\\(\\|n)/g, (_, c: string) => (c === 'n' ? '\n' : '\\'))
+}
+
+function sendAnswer($: Engine, answer: string): void {
+  if (answerPath === null) return
+  void $.fs.write(answerPath, `${answer}\nEND`).catch(() => undefined)
+}
+
+async function closeDialog($: Engine): Promise<void> {
+  answerPath = null
+  if (!isDialogOpen) return
+  isDialogOpen = false
+  await update($, dialogState, () => null)
+  await $.ui.close({ id: DIALOG_PANE })
+}
+
+// Shows `dialog` in the dialog pane, opening the pane if it is not open,
+// and waits for one answer: a choice's key, "text:" and what was typed, or
+// "cancel". Null when the pane cannot be shown, such as on a narrow terminal.
+async function askDialog($: Engine, dialog: Dialog, signal: AbortSignal, isNew: boolean): Promise<string | null> {
+  const temp = (await $.env.get('TEMP')) ?? (await $.env.get('TMP'))
+  if (!temp) return null
+  const path = `${temp}\\blind-claude\\answers\\${dialog.id.replace(/[^\w-]/g, '_')}.txt`
+  answerPath = path
+  await update($, dialogState, () => dialog)
+  if (!isDialogOpen) {
+    const rows = dialog.lines.length + dialog.options.length + (dialog.input ? 2 : 0) + 2
+    const opened = await $.ui.open({ id: DIALOG_PANE, title: 'Blind Claude', focus: true, closeOnEscape: true, holdToasts: true, rows })
+    isDialogOpen = true
+    if (!opened.isPlaced) {
+      $.ui.log(`Blind Claude could not show its dialog (${opened.reason}), so Claude Code's own is shown.`, { to: 'debug' })
+      await closeDialog($)
+      return null
+    }
+  }
+  if (isNew) {
+    await playSound($, 'attention')
+    if (current.level !== 'none') await speak($, dialogSpeech(dialog), { interrupt: true, isRaw: true })
+  }
+  const script = `${$.plugin.root}\\scripts\\wait-answer.ps1`
+  const onAbort = () => sendAnswer($, 'cancel')
+  signal.addEventListener('abort', onAbort)
+  try {
+    while (true) {
+      const ran = await $.process.run(['powershell.exe', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script, '-Path', path], { timeoutMs: 600_000 })
+      const line = ran.stdout.split('\n').map(l => l.trim()).find(l => l.startsWith('ANSWER '))
+      if (line !== undefined) return decodeAnswer(line.slice('ANSWER '.length))
+      if (signal.aborted) return 'cancel'
+    }
+  } finally {
+    signal.removeEventListener('abort', onAbort)
+  }
+}
+
+// Runs `work` once every dialog before it has been answered.
+function oneDialogAtATime<T>(work: () => Promise<T>): Promise<T> {
+  const run = dialogQueue.then(work, work)
+  dialogQueue = run.catch(() => undefined)
+
+  return run
+}
+
+type PermissionAnswer = { decision: 'allow' } | { decision: 'deny'; reason: string } | null
+
+// Asks for permission in the dialog. Null leaves it to Claude Code's own prompt.
+async function askPermission($: Engine, id: string, tool: string, input: unknown, reason: string | undefined, preview: FileChange | undefined, signal: AbortSignal): Promise<PermissionAnswer> {
+  const dialog = permissionDialog(`permission-${id}`, tool, cleanInput(input), reason, preview ? summary(preview) : undefined)
+  let isNew = true
+  try {
+    while (true) {
+      const answer = await askDialog($, dialog, signal, isNew)
+      isNew = false
+      if (answer === null || answer === 'engine') return null
+      if (answer === 'read' && preview) {
+        await openReport($, [preview], 'Blind Claude: the change Claude wants to make. It has not been made yet.')
+        continue
+      }
+      if (answer === 'yes') return { decision: 'allow' }
+      if (answer === 'always') {
+        allowedThisSession.add(allowKey(tool, input))
+        return { decision: 'allow' }
+      }
+      if (answer.startsWith('text:')) return { decision: 'deny', reason: `The user declined this tool call, and said: ${answer.slice(5)}` }
+      return { decision: 'deny', reason: "The user declined this tool call in Blind Claude's permission dialog." }
+    }
+  } finally {
+    await closeDialog($)
+  }
+}
+
+// Claude's questions, one at a time. Answers the AskUserQuestion result's
+// answers, "engine" for Claude Code's own dialog, or "cancel".
+async function askQuestions($: Engine, id: string, questions: readonly Question[], shown: readonly Question[], signal: AbortSignal): Promise<Record<string, string> | 'engine' | 'cancel'> {
+  const answers: Record<string, string> = {}
+  try {
+    for (let index = 0; index < questions.length; index++) {
+      const question = questions[index]!
+      const chosen = new Set<number>()
+      let isNew = true
+      while (true) {
+        const answer = await askDialog($, questionDialog(`question-${id}-${index}`, shown, index, chosen), signal, isNew)
+        isNew = false
+        if (answer === null || answer === 'engine') return 'engine'
+        if (answer === 'cancel') return 'cancel'
+        if (answer.startsWith('text:')) {
+          answers[question.question] = answer.slice(5)
+          break
+        }
+        if (answer === 'done') {
+          answers[question.question] = answerOf(question, [...chosen].sort((a, b) => a - b))
+          break
+        }
+        const pick = /^opt-(\d+)$/.exec(answer)
+        if (!pick) continue
+        const n = Number(pick[1])
+        if (!question.multiSelect) {
+          answers[question.question] = answerOf(question, [n])
+          break
+        }
+        if (chosen.has(n)) chosen.delete(n)
+        else chosen.add(n)
+        const label = shown[index]?.options[n]?.label ?? ''
+        await speak($, `${chosen.has(n) ? 'Chosen' : 'Not chosen'}, ${label}.`, { interrupt: true, isRaw: true })
+      }
+    }
+  } finally {
+    await closeDialog($)
+  }
+
+  return answers
+}
+
+// Cleans the symbols out of every string a dialog will show.
+function cleanInput(input: unknown): unknown {
+  if (typeof input === 'string') return cleanForDisplay(input, 'on')
+  if (Array.isArray(input)) return input.map(cleanInput)
+  if (typeof input === 'object' && input !== null) {
+    return Object.fromEntries(Object.entries(input as Record<string, unknown>).map(([k, v]) => [k, k === 'command' || k.endsWith('_string') || k === 'content' ? v : cleanInput(v)]))
+  }
+
+  return input
 }
 
 function word(args: string): [string, string] {
@@ -408,6 +697,7 @@ const commandFailed = () => ({ text: 'That Blind Claude command failed. Type /bl
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const started = await next(e)
+    cwd = started.cwd
     hasSettings = false
     await loadSettings($)
 
@@ -418,7 +708,8 @@ export const register: Register = on => {
       { name: 'volume', description: 'Blind Claude: set the speech volume', argumentHint: '[0 to 100]' },
       { name: 'clean', description: 'Blind Claude: turn symbol cleaning on, off, or words', argumentHint: '[on|off|words]' },
       { name: 'sounds', description: 'Blind Claude: list, play, pick, add and remove sound cues', argumentHint: '[help|status|on|off|list|play|pick|add|remove|folder]' },
-      { name: 'blind', description: 'Blind Claude: open the settings menu, show status or help, reset, or restart speech', argumentHint: '[help|status|reset|restart]' },
+      { name: 'blind', description: 'Blind Claude: open the settings menu, show status or help, reset, or restart speech', argumentHint: '[help|status|reset|restart|prompts on|prompts off]' },
+      { name: 'changes', description: 'Blind Claude: read what Claude changed, in Notepad++ or Notepad', argumentHint: '[help|session|<number>|open <number>|git|preview|auto|before|editor|view|context|rows]' },
     ]
     // Claude Code refuses a name one of its own commands uses, and some exist
     // only in interactive sessions. One refusal must not stop the others.
@@ -536,21 +827,135 @@ export const register: Register = on => {
     return appended
   }).catch(($, e, next) => next(e))
 
+  // Claude's questions in the accessible dialog. The answer is given in
+  // place of the tool, so Claude Code's own dialog never opens; choosing
+  // "Show Claude Code's own question instead" lets it open.
+  on('tool.call', { tool: 'AskUserQuestion' }, async ($, e, next) => {
+    await loadSettings($)
+    if (!current.prompts) return next(e)
+    const questions = parseQuestions(e)
+    const shown = parseQuestions(cleanInput(e))
+    if (questions === null || shown === null) return next(e)
+    const answer = await oneDialogAtATime(() => askQuestions($, e.tool_use_id ?? 'question', questions, shown, next.signal))
+    if (answer === 'engine') return next(e)
+    if (answer === 'cancel') return { deny: 'The user dismissed the question without answering.' }
+
+    return { result: { questions: e.questions, answers: answer } }
+  }).catch(($, e, next) => next(e))
+
   on('tool.call', async ($, e, next) => {
     await loadSettings($)
     const isMain = e.agentId === undefined
+    const isFileTool = e.tool === 'Edit' || e.tool === 'Write'
+    if (isFileTool) {
+      const preview = await preparePreview($, e.tool, e, e.tool_use_id)
+      if (preview && e.tool_use_id !== undefined) {
+        try {
+          $.ui.notice(e.tool_use_id, `Blind Claude: ${summary(preview)} Type /changes preview to read it.`)
+        } catch {
+          // No dialog is open for this call.
+        }
+      }
+    }
     if (isMain && speaksToolCall(current.level, e.tool)) await speak($, describeToolCall(e.tool, e), { isRaw: true })
     const ran = await next(e)
-    if (isMain && speaksToolResult(current.level) && ran.deny === undefined) {
-      await speak($, describeToolResult(e.tool, ran.isError === true), { isRaw: true })
+    if (e.tool_use_id !== undefined) previews.delete(e.tool_use_id)
+    const turn = (await read($, turnState)) ?? 0
+    const change = isFileTool && ran.deny === undefined && ran.isError !== true ? changeFromResult(e.tool, ran.result, turn, !isMain) : null
+    if (change) await update($, changesState, list => [...(list ?? []), change].slice(-500))
+    if (isMain && ran.deny === undefined) {
+      if (change && (current.level === 'all' || current.level === 'most')) await speak($, summary(change, true), { isRaw: true })
+      else if (speaksToolResult(current.level)) await speak($, describeToolResult(e.tool, ran.isError === true), { isRaw: true })
     }
 
     return ran
   }).catch(($, e, next) => next(e))
 
+  // Permission prompts in the accessible dialog. Claude Code decides first
+  // whether to ask; only a question meant for the person is taken over.
+  on('tool.check', async ($, e, next) => {
+    const verdict = await next(e)
+    await loadSettings($)
+    const id = e.tool_use_id
+    if (verdict.decision !== 'ask' || e.approver !== 'person' || id === undefined || ENGINE_ONLY_TOOLS.has(e.tool)) return verdict
+    if (allowedThisSession.has(allowKey(e.tool, e.input))) return { decision: 'allow', reason: 'Allowed for the rest of this session in Blind Claude.' }
+    const preview = previews.get(id)
+    if (preview && current.changes.isPreview) await openReport($, [preview], 'Blind Claude: the change Claude wants to make. It has not been made yet.')
+    if (!current.prompts) return verdict
+    const answer = await oneDialogAtATime(() => askPermission($, id, e.tool, e.input, verdict.reason, preview, next.signal))
+
+    return answer === null ? verdict : answer
+  }).catch(($, e, next) => next(e))
+
+  // The dialog: its question at the top, then one choice per line. Up and
+  // down arrow move between them, Enter or the number chooses.
+  on('ui.render', { component: 'Pane', requestId: DIALOG_PANE }, async ($, e) => {
+    const elements = $.ui.resolve(e)
+    const { Box, Text, Button } = elements
+    // Mobile has no text box, so there the choices are all there is.
+    const Input = 'Input' in elements ? elements.Input : null
+    const dialog = await read($, dialogState)
+    if (!dialog) return <Text>Nothing to answer.</Text>
+
+    return (
+      <Box flexDirection="column">
+        <Text bold>{dialog.title}</Text>
+        {dialog.lines.map(line => (
+          <Text>{line}</Text>
+        ))}
+        {dialog.options.map((option, i) =>
+          i < 9 ? (
+            <Button key={option.key} label={option.label} hotkey={String(i + 1)} plain autoFocus={i === 0 ? true : undefined} onPress={() => sendAnswer($, option.key)} />
+          ) : (
+            <Button key={option.key} label={option.label} plain onPress={() => sendAnswer($, option.key)} />
+          ),
+        )}
+        {dialog.input && Input ? (
+          <Input key="typed" label={dialog.input.label} submitLabel="send" onSubmit={(value: string) => (value.trim() === '' ? undefined : sendAnswer($, `text:${value}`))} />
+        ) : null}
+      </Box>
+    )
+  })
+
+  // Says the choice the person moves to, so the arrows can be followed by ear.
+  on('ui.focus', async ($, e, next) => {
+    const moved = await next(e)
+    if (e.requestId !== DIALOG_PANE || e.origin.kind !== 'person' || e.element === undefined) return moved
+    const dialog = await read($, dialogState)
+    const option = dialog?.options.find(o => o.key === e.element)
+    if (option) await speak($, option.spoken, { interrupt: true, isRaw: true })
+    else if (e.element === 'typed' && dialog?.input) await speak($, dialog.input.label, { interrupt: true, isRaw: true })
+
+    return moved
+  }).catch(($, e, next) => next(e))
+
+  // Escape closes the dialog: a permission is then refused and a question
+  // left unanswered, as in Claude Code's own.
+  on('ui.close', async ($, e, next) => {
+    if (e.id === DIALOG_PANE && e.origin.kind === 'person') {
+      isDialogOpen = false
+      sendAnswer($, 'cancel')
+    }
+
+    return next(e)
+  }).catch(($, e, next) => next(e))
+
+  // Edits in the transcript: a summary and the changed lines in words, in
+  // place of the colored diff. Control O still shows Claude Code's own.
+  on('ui.render', { component: 'ToolResult' }, ($, e, next) => {
+    const { tool, output, isErrored, isExpanded } = e.props
+    if (current.clean === 'off' || isErrored || isExpanded === true || (tool !== 'Edit' && tool !== 'Write')) return next(e)
+    const change = changeFromResult(tool, output, 0, false)
+    if (change === null) return next(e)
+    const { Text } = $.ui.resolve(e)
+
+    return <Text>{rowText(change, current.changes.isSummaryOnly)}</Text>
+  })
+
   on('turn.start', async ($, e, next) => {
     await loadSettings($)
     const started = await next(e)
+    if (e.agentId === undefined) await update($, turnState, n => (n ?? 0) + 1)
     await playSound($, 'start')
 
     return started
@@ -575,7 +980,13 @@ export const register: Register = on => {
     if (e.reason === 'answer') {
       if (e.answer.trim() !== '') lastReply = e.answer
       await playSound($, 'done')
+      const turn = (await read($, turnState)) ?? 0
+      const changed = filesOf((await sessionChanges($)).filter(c => c.turn === turn)).length
+      if (changed > 0 && speaksFinalAnswer(current.level)) {
+        await speak($, `Changed ${changed === 1 ? '1 file' : `${changed} files`}. Type /changes to read ${changed === 1 ? 'it' : 'them'}.`, { isRaw: true })
+      }
       if (speaksFinalAnswer(current.level)) await speak($, e.answer)
+      if (changed > 0 && current.changes.isAuto) await openReport($, await lastTurnChanges($), 'Blind Claude change report for the last turn.')
     } else if (e.reason === 'error') {
       await playSound($, 'error')
       if (speaksAlerts(current.level)) await speak($, 'Claude stopped because of an error.', { isRaw: true })
@@ -790,6 +1201,100 @@ export const register: Register = on => {
     return { text: `Unknown sound command "${action}". Type /sounds help for the list.` }
   }).catch(commandFailed)
 
+  on('command.run', { command: 'changes' }, async ($, e) => {
+    await loadSettings($)
+    const [first, rest] = word(e.args)
+    const [second] = word(rest)
+    const setChanges = async (change: Partial<Settings['changes']>, text: string) => {
+      await saveSettings($, { changes: { ...current.changes, ...change } })
+      return { text }
+    }
+    const onOff = async (key: 'isAuto' | 'isPreview', what: string) => {
+      if (second !== 'on' && second !== 'off') return { text: `Use /changes ${first} on or /changes ${first} off.` }
+      return setChanges({ [key]: second === 'on' }, `${what} turned ${second}.`)
+    }
+
+    if (first === 'help') return { text: CHANGES_HELP }
+    if (first === 'settings') return { text: await showScreen($, { kind: 'changes' }) }
+    if (first === 'auto') return onOff('isAuto', 'Opening the report after each turn that changes files')
+    if (first === 'before' || (first === 'preview' && second !== '')) return onOff('isPreview', 'Opening the change before you approve an edit')
+    if (first === 'editor') {
+      const editor = rest.replace(/^"(.*)"$/, '$1').trim()
+      if (editor === '') return { text: `The editor is ${editorName(current.changes.editor)}. Use /changes editor and auto, notepad++, notepad or the path of a program.` }
+      const named = ['auto', 'notepad++', 'notepad'].includes(editor.toLowerCase()) ? editor.toLowerCase() : editor
+      return setChanges({ editor: named }, `Change reports will open in ${editorName(named)}.`)
+    }
+    if (first === 'view') {
+      if (second !== 'text' && second !== 'browser') return { text: 'Use /changes view text or /changes view browser.' }
+      return setChanges({ view: second }, second === 'browser' ? 'Change reports will open as a web page.' : 'Change reports will open as text.')
+    }
+    if (first === 'context') {
+      if (!/^\d+$/.test(second)) return { text: 'Use /changes context and a number from 0 to 5.' }
+      const context = clamp(Number(second), 0, 5)
+      return setChanges({ context }, `${context} unchanged lines will be shown around each change.`)
+    }
+    if (first === 'rows') {
+      if (second !== 'full' && second !== 'summary') return { text: 'Use /changes rows full or /changes rows summary.' }
+      await saveSettings($, { changes: { ...current.changes, isSummaryOnly: second === 'summary' } })
+      $.ui.invalidate('ui.render')
+      return { text: second === 'summary' ? 'Edits in the transcript show a summary only.' : 'Edits in the transcript show a summary and the changed lines.' }
+    }
+    if (first === 'preview') {
+      if (lastPreview === null) return { text: 'No edit is waiting for your permission.' }
+      return { text: await openReport($, [lastPreview], 'Blind Claude: the change Claude wants to make. It has not been made yet.') }
+    }
+    if (first === 'git') {
+      const diff = async (args: string[]) => {
+        try {
+          return await $.process.run(['git', ...args], { timeoutMs: 60_000 })
+        } catch {
+          return null
+        }
+      }
+      let ran = await diff(['diff', 'HEAD', '--no-color', '--no-ext-diff'])
+      if (ran === null || ran.exitCode !== 0) ran = await diff(['diff', '--no-color', '--no-ext-diff'])
+      if (ran === null || ran.exitCode !== 0) return { text: 'This folder is not a git repository, or git is not installed.' }
+      const changes = parseGitDiff(ran.stdout)
+      const untracked = await diff(['ls-files', '--others', '--exclude-standard'])
+      const newFiles = (untracked?.stdout ?? '').split('\n').map(l => l.trim()).filter(l => l !== '')
+      const footer = newFiles.length > 0 ? [`New files git does not track yet, not shown above: ${newFiles.slice(0, 50).join(', ')}${newFiles.length > 50 ? `, and ${newFiles.length - 50} more` : ''}.`] : undefined
+      if (changes.length === 0) return { text: newFiles.length > 0 ? `No changes to tracked files since the last commit. ${footer![0]}` : 'No changes since the last commit.' }
+      return { text: await openReport($, changes, 'Blind Claude change report: every change since the last commit, from git.', footer) }
+    }
+    if (first === 'session') {
+      const changes = await sessionChanges($)
+      if (changes.length === 0) return { text: 'Claude has not changed any files in this session yet.' }
+      return { text: await openReport($, changes, 'Blind Claude change report for this whole session.') }
+    }
+
+    const changes = await lastTurnChanges($)
+    if (changes.length === 0) return { text: 'Claude has not changed any files in this session yet. /changes git shows changes since the last commit.' }
+    const files = filesOf(changes)
+    const pickFile = (text: string) => {
+      const n = Number(text)
+      return /^\d+$/.test(text) && n >= 1 && n <= files.length ? files[n - 1]! : null
+    }
+    const noFile = (text: string) => ({ text: `There is no file ${text}. The last turn changed ${files.length === 1 ? '1 file' : `${files.length} files`}: ${files.map((f, i) => `${i + 1}, ${relativePath(f.path, cwd)}`).join('. ')}.` })
+
+    if (first === 'open') {
+      const file = pickFile(second)
+      if (file === null) return noFile(second)
+      const line = firstChangedLine(file)
+      const opened = await openInEditor($, file.path, { editor: current.changes.editor, line })
+      if ('error' in opened) return { text: `Could not open ${relativePath(file.path, cwd)}: ${opened.error}.` }
+      const goTo = opened.editor === 'Notepad++' ? `at line ${line}` : `. Press Control G and type ${line} to go to the first change`
+      return { text: `Opened ${relativePath(file.path, cwd)} in ${opened.editor} ${goTo}.`.replace(' .', '.') }
+    }
+    if (first !== '') {
+      const file = pickFile(first)
+      if (file === null) return /^\d+$/.test(first) ? noFile(first) : { text: `Unknown option "${first}". Type /changes help for the list.` }
+      const forFile = changes.filter(c => c.path.toLowerCase() === file.path.toLowerCase())
+      return { text: await openReport($, forFile, `Blind Claude change report for ${relativePath(file.path, cwd)}, from the last turn that changed files.`) }
+    }
+
+    return { text: await openReport($, changes, 'Blind Claude change report for the last turn that changed files.') }
+  }).catch(commandFailed)
+
   on('command.run', { command: 'blind' }, async ($, e) => {
     await loadSettings($)
     const [choice] = word(e.args)
@@ -797,6 +1302,13 @@ export const register: Register = on => {
     if (choice === 'reset') {
       await resetSettings($)
       return { text: RESET_MESSAGE }
+    }
+    if (choice === 'prompts') {
+      const [state] = word(e.args.trim().slice('prompts'.length))
+      if (state === '') return { text: await showScreen($, { kind: 'prompts' }) }
+      if (state !== 'on' && state !== 'off') return { text: 'Use /blind prompts on or /blind prompts off.' }
+      await saveSettings($, { prompts: state === 'on' })
+      return { text: state === 'on' ? "Permission prompts and Claude's questions now use Blind Claude's dialog." : "Permission prompts and Claude's questions now use Claude Code's own." }
     }
     if (choice === 'restart') {
       const old = bridge

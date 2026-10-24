@@ -20,8 +20,10 @@ Version 0.1.0, early and in active development. Working now:
 3. Listing, testing and choosing a voice, plus rate and volume.
 4. Sound cues for four events: done, start, attention and error. Five done sounds come built in, and you can add your own for any event.
 5. A still "Working." line in place of the animated spinner, and "Done, took 12 seconds." at the end of a turn.
+6. Edits shown in words, and `/changes` to read everything Claude changed in Notepad++ or Notepad.
+7. Permission prompts and Claude's questions in a plain dialog: the question first, one choice per line, spoken as you arrow through them, Enter to choose.
 
-Not built yet: plain tool rows and diffs, notifications, and pause and resume. See the roadmap.
+Not built yet: plain rows for other tools, notifications, and pause and resume. See the roadmap.
 
 ## Installing
 
@@ -63,7 +65,9 @@ Double click `uninstall.cmd`, or run `.\uninstall.ps1`. Your settings and your o
 5. [Terminal experience](docs/terminal-experience.md): spinners, status, sound cues and layout.
 6. [Commands and settings](docs/commands-and-settings.md): every slash command and setting.
 7. [Roadmap](docs/roadmap.md): the order the work will be done in.
-8. [Writing accessible docs](docs/writing-style.md): rules for anything written in this project.
+8. [Accessible diffs](docs/accessible-diffs.md): what changed and where, in the transcript and in the change report.
+9. [Permission prompts and questions](docs/prompts-and-questions.md): the plain dialog for permissions and Claude's questions.
+10. [Writing accessible docs](docs/writing-style.md): rules for anything written in this project.
 
 ## Quick look at the commands
 
@@ -79,7 +83,8 @@ These work now, apart from the ones marked as planned in the commands document.
 8. `/rate` and `/volume`: speed and loudness.
 9. `/clean on`, `/clean off` or `/clean words`: symbol cleaning.
 10. `/sounds`: sound cues. `/sounds help` lists the sound commands.
-11. `/blind`: open the settings menu. Type a number and press Enter to pick a setting, then a number for its choice. 0 goes back. `/blind status` reads every setting in one list, `/blind help` lists every command, and `/blind restart` starts speech again if it has stopped.
+11. `/changes`: read what Claude changed in Notepad++ or Notepad. `/changes help` lists the rest.
+12. `/blind`: open the settings menu. Type a number and press Enter to pick a setting, then a number for its choice. 0 goes back. `/blind status` reads every setting in one list, `/blind help` lists every command, and `/blind restart` starts speech again if it has stopped.
 
 ## Platform
 

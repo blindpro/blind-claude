@@ -35,7 +35,7 @@ test('choosing from the main menu opens that setting', () => {
   expect(choose({ kind: 'main' }, 2, CTX)).toEqual({ kind: 'open', screen: { kind: 'engine' } })
   expect(choose({ kind: 'main' }, 3, CTX)).toEqual({ kind: 'open', screen: { kind: 'voice' } })
   expect(choose({ kind: 'main' }, 0, CTX)).toEqual({ kind: 'close' })
-  expect(choose({ kind: 'main' }, 9, CTX)).toEqual({ kind: 'open', screen: { kind: 'main' }, message: 'There is no option 9.' })
+  expect(choose({ kind: 'main' }, 11, CTX)).toEqual({ kind: 'open', screen: { kind: 'main' }, message: 'There is no option 11.' })
 })
 
 test('a choice sets the value and goes back to the main menu', () => {
@@ -65,7 +65,7 @@ test('an event can be turned off, or given one sound that plays', () => {
 })
 
 test('reset asks first', () => {
-  expect(choose({ kind: 'main' }, 8, CTX)).toEqual({ kind: 'open', screen: { kind: 'reset' } })
+  expect(choose({ kind: 'main' }, 10, CTX)).toEqual({ kind: 'open', screen: { kind: 'reset' } })
   expect(choose({ kind: 'reset' }, 1, CTX)).toEqual({ kind: 'reset', screen: { kind: 'main' } })
   expect(choose({ kind: 'reset' }, 2, CTX)).toEqual({ kind: 'open', screen: { kind: 'main' } })
 })
@@ -73,4 +73,16 @@ test('reset asks first', () => {
 test('the speech engine can be NVDA, the Windows voice, or whichever is there', () => {
   expect(screenText({ kind: 'engine' }, CTX)).toContain('1. auto: NVDA while it is running, otherwise the Windows voice, current.')
   expect(choose({ kind: 'engine' }, 2, CTX)).toEqual({ kind: 'set', change: { engine: 'nvda' }, message: 'Speech engine set to nvda.', screen: { kind: 'main' } })
+})
+
+test('the changes screen opens the report and steps through its settings', () => {
+  expect(choose({ kind: 'main' }, 8, CTX)).toEqual({ kind: 'open', screen: { kind: 'changes' } })
+  expect(choose({ kind: 'changes' }, 1, CTX)).toEqual({ kind: 'changes-report' })
+  expect(choose({ kind: 'changes' }, 4, CTX)).toMatchObject({ change: { changes: { editor: 'notepad++' } }, screen: { kind: 'changes' } })
+  expect(choose({ kind: 'changes' }, 6, CTX)).toMatchObject({ change: { changes: { context: 3 } } })
+})
+
+test('permission prompts can go back to Claude Code', () => {
+  expect(screenText({ kind: 'prompts' }, CTX)).toContain("1. Blind Claude's dialog")
+  expect(choose({ kind: 'prompts' }, 2, CTX)).toMatchObject({ change: { prompts: false }, screen: { kind: 'main' } })
 })

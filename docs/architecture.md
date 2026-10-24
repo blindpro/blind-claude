@@ -59,6 +59,12 @@ Rewriting a row in `ui.render` only changes what is drawn. It never changes what
 4. `$.store`: keeps settings between sessions.
 5. `userConfig` in the manifest: exposes the main settings in the Claude Code config menu as well.
 
+### Diffs, permission prompts and questions
+
+1. `tool.call` on Edit and Write records each change in `$.state`, declared in `plugin/types/index.d.ts`, and works out a preview of the change before it runs. `plugin/hooks/diff.ts` turns them into words. See the accessible diffs document.
+2. `ui.render` on `ToolResult` draws edits as worded rows, and `/changes` opens the change report through `plugin/scripts/open-changes.ps1`.
+3. `tool.check` shows Blind Claude's own dialog when Claude Code would ask you for permission, and `tool.call` on AskUserQuestion answers Claude's questions with it. The dialog is a focused pane drawn from `plugin/hooks/prompts.ts`, with `ui.focus` speaking each choice and `plugin/scripts/wait-answer.ps1` waiting for the answer. See the prompts and questions document.
+
 ## Flow of one reply
 
 1. You send a message. Blind Claude stops any speech still playing.

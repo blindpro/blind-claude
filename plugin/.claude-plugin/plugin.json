@@ -2,5 +2,6 @@
   "name": "blind-claude",
   "version": "0.1.0",
   "description": "Makes Claude Code friendlier for blind and screen reader users: clean output, text to speech, voice choice and sound cues.",
-  "author": { "name": "blindpro", "email": "noahbalboa34@gmail.com" }
+  "author": { "name": "blindpro", "email": "noahbalboa34@gmail.com" },
+  "types": "./types/index.d.ts"
 }

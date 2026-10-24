@@ -2,7 +2,7 @@
 // number does there. register.tsx keeps which screen is open, applies the
 // changes and plays or speaks what an answer asks for.
 
-import { CLEAN_MODES, ENGINES, LEVELS, SOUND_EVENTS, clamp } from './settings'
+import { CLEAN_MODES, ENGINES, LEVELS, SOUND_EVENTS, clamp, editorName } from './settings'
 import type { CleanMode, Settings, SoundEvent, SpeechEngine } from './settings'
 import { EVENT_WORDS } from './sounds'
 import type { SoundFile } from './sounds'
@@ -19,6 +19,8 @@ export type Screen =
   | { kind: 'sounds' }
   | { kind: 'all-sounds' }
   | { kind: 'event'; event: SoundEvent }
+  | { kind: 'changes' }
+  | { kind: 'prompts' }
   | { kind: 'reset' }
 
 // What some screens need beyond the settings: the installed voices (null
@@ -34,6 +36,7 @@ export type MenuAnswer =
   | { kind: 'open'; screen: Screen; message?: string }
   | { kind: 'set'; change: Partial<Settings>; message: string; screen: Screen; play?: SoundFile }
   | { kind: 'reset'; screen: Screen }
+  | { kind: 'changes-report' }
   | { kind: 'close' }
 
 const LEVEL_WORDS: Record<Settings['level'], string> = {
@@ -54,6 +57,9 @@ const CLEAN_WORDS: Record<CleanMode, string> = {
   off: 'show output unchanged',
   words: 'remove symbols, and replace emoji with their names',
 }
+
+// The editors the Changes screen steps through, in order.
+const EDITORS = ['auto', 'notepad++', 'notepad']
 
 const RATE_STEP = 1
 const VOLUME_STEP = 10
@@ -104,6 +110,8 @@ function screenParts(screen: Screen, ctx: MenuContext): { title: string; items: 
           `Volume, ${s.volume}`,
           `Symbol cleaning, ${s.clean}`,
           `Sounds, ${onOff(s.sounds)}`,
+          `Changes, opened in ${editorName(s.changes.editor)}`,
+          `Permission prompts and questions, ${s.prompts ? "Blind Claude's dialog" : "Claude Code's own"}`,
           'Reset all settings to defaults',
         ],
       }
@@ -155,6 +163,29 @@ function screenParts(screen: Screen, ctx: MenuContext): { title: string; items: 
         items: [current('On', choice.isOn), current('Off', !choice.isOn), current('Random sound each time', choice.pick === 'random'), ...files],
       }
     }
+    case 'changes': {
+      const c = s.changes
+      return {
+        title: 'Changes: the report of what Claude changed in your files.',
+        items: [
+          'Open the change report for the last turn',
+          `Open it by itself after each turn that changes files, ${onOff(c.isAuto)}`,
+          `Open the change before you approve an edit, ${onOff(c.isPreview)}`,
+          `Editor, ${editorName(c.editor)}. Choosing this moves to the next editor`,
+          `View, ${c.view === 'browser' ? 'web page' : 'text'}. Choosing this switches between text and web page`,
+          `Unchanged lines around each change, ${c.context}. Choosing this adds one, up to 5, then goes back to 0`,
+          `Edits in the transcript, ${c.isSummaryOnly ? 'summary only' : 'summary and changed lines'}`,
+        ],
+      }
+    }
+    case 'prompts':
+      return {
+        title: `Permission prompts and questions, now ${s.prompts ? "Blind Claude's dialog" : "Claude Code's own"}.`,
+        items: [
+          current("Blind Claude's dialog: the question first, then one choice per line, spoken as you move", s.prompts),
+          current("Claude Code's own prompts", !s.prompts),
+        ],
+      }
     case 'reset':
       return { title: 'Reset every Blind Claude setting to its default?', items: ['Yes, reset', 'No'] }
   }
@@ -187,6 +218,8 @@ const MAIN_SCREENS: readonly Screen[] = [
   { kind: 'volume' },
   { kind: 'clean' },
   { kind: 'sounds' },
+  { kind: 'changes' },
+  { kind: 'prompts' },
   { kind: 'reset' },
 ]
 
@@ -260,6 +293,46 @@ export function choose(screen: Screen, choice: number, ctx: MenuContext): MenuAn
       }
       const file = ctx.files[index - 3]!
       return { kind: 'set', change: setEvent({ pick: file.name }), message: `${event} will always play ${file.name}.`, screen: sounds, play: file }
+    }
+    case 'changes': {
+      const c = s.changes
+      const set = (change: Partial<Settings['changes']>, message: string): MenuAnswer => ({
+        kind: 'set',
+        change: { changes: { ...c, ...change } },
+        message,
+        screen,
+      })
+      switch (index) {
+        case 0:
+          return { kind: 'changes-report' }
+        case 1:
+          return set({ isAuto: !c.isAuto }, `Opening after each turn turned ${onOff(!c.isAuto)}.`)
+        case 2:
+          return set({ isPreview: !c.isPreview }, `Opening before you approve an edit turned ${onOff(!c.isPreview)}.`)
+        case 3: {
+          const editor = EDITORS[(EDITORS.indexOf(c.editor) + 1) % EDITORS.length]!
+          return set({ editor }, `Editor set to ${editorName(editor)}.`)
+        }
+        case 4: {
+          const view = c.view === 'browser' ? 'text' : 'browser'
+          return set({ view }, `View set to ${view === 'browser' ? 'web page' : 'text'}.`)
+        }
+        case 5: {
+          const context = c.context >= 5 ? 0 : c.context + 1
+          return set({ context }, `${context} unchanged lines around each change.`)
+        }
+        default:
+          return set({ isSummaryOnly: !c.isSummaryOnly }, c.isSummaryOnly ? 'Edits in the transcript list their changed lines.' : 'Edits in the transcript show a summary only.')
+      }
+    }
+    case 'prompts': {
+      const prompts = index === 0
+      return {
+        kind: 'set',
+        change: { prompts },
+        message: prompts ? "Permission prompts and questions use Blind Claude's dialog." : "Permission prompts and questions use Claude Code's own.",
+        screen: main,
+      }
     }
     case 'reset':
       return index === 0 ? { kind: 'reset', screen: main } : { kind: 'open', screen: main }

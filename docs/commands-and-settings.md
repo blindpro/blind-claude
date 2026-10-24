@@ -13,7 +13,9 @@ Type `/blind` to open the settings menu. It is printed and spoken as a numbered 
 5. Volume.
 6. Symbol cleaning.
 7. Sounds.
-8. Reset all settings to defaults.
+8. Changes.
+9. Permission prompts and questions.
+10. Reset all settings to defaults.
 
 Type a number and press Enter to open that setting. Its choices are listed the same way, with the one in use marked as current. For example, symbol cleaning lists 1 on, 2 off and 3 words. Type the number of a choice and press Enter: the setting is saved, the change is confirmed, and you are back at the main menu.
 
@@ -22,7 +24,9 @@ How each part behaves:
 1. Speech level, speech engine, voice and symbol cleaning: choosing returns you to the main menu. The speech engine lists 1 auto, 2 nvda and 3 windows. The system default voice is listed last, so the voice numbers match the ones `/voices` uses.
 2. Rate and volume: 1 is faster or louder, 2 is slower or quieter, and 3 goes back to normal. These stay open after each choice so you can press 1 several times and hear the change each time. Rate moves one step, volume ten.
 3. Sounds: 1 turns all sounds on or off. 2 to 5 open the done, start, attention and error events. Each event lists on, off, a random sound each time, and then every sound file for that event. Choosing a file plays it and makes it the sound for that event. Adding and removing your own sounds still uses the `/sounds add` and `/sounds remove` commands.
-4. Reset asks first: 1 resets, 2 leaves everything as it is.
+4. Changes: 1 opens the change report for the last turn. 2 to 7 change how reports work: opening after each turn, opening before you approve an edit, the editor, text or web page, how many unchanged lines show around a change, and what edits show in the transcript. Each choice stays on this screen so you can change several.
+5. Permission prompts and questions: 1 uses Blind Claude's dialog, 2 uses Claude Code's own.
+6. Reset asks first: 1 resets, 2 leaves everything as it is.
 
 Moving around:
 
@@ -74,6 +78,19 @@ With `/clean off`, both show Claude Code's own panels again.
 5. `/rate` on its own opens the rate menu. Followed by a number from minus 10 to 10, or `/rate faster`, or `/rate slower`: set the speed.
 6. `/volume` on its own opens the volume menu. Followed by a number from 0 to 100: set the volume.
 
+### Changes
+
+1. `/changes`: open what Claude changed in the last turn that changed files, in Notepad++ or Notepad.
+2. `/changes session`, `/changes 2`, `/changes open 2`, `/changes git` and `/changes preview`: the whole session, one file, the file itself, everything since the last commit, and the edit waiting for permission.
+3. `/changes auto`, `/changes before`, `/changes editor`, `/changes view`, `/changes context` and `/changes rows`: how reports open and what they show.
+4. `/changes help` lists them all. The accessible diffs document explains each one.
+
+### Permission prompts and questions
+
+1. `/blind prompts on`: permission prompts and Claude's questions in Blind Claude's dialog, with the question first and one choice per line. Default.
+2. `/blind prompts off`: use Claude Code's own.
+3. The prompts and questions document explains the dialog.
+
 ### Output
 
 1. `/clean`: open the symbol cleaning menu.
@@ -113,7 +130,9 @@ Your own sounds are kept in your local app data folder, under BlindClaude, sound
 5. Volume: 100, for the Windows voice.
 6. Cleaning: on.
 7. Sounds: on, for every event, with a random sound each time.
-8. Notifications, the working update interval, and the screen reader overlap setting are planned, not built yet.
+8. Change reports: Notepad++ if installed, else Notepad, as text, 2 unchanged lines around each change, opened when you ask.
+9. Permission prompts and questions: Blind Claude's dialog.
+10. Notifications, the working update interval, and the screen reader overlap setting are planned, not built yet.
 
 ## Where settings live
 

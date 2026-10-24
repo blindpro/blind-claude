@@ -2,7 +2,7 @@
 
 The order the work will be done in. Each step should be usable on its own before the next one starts.
 
-Progress as of version 0.1.0: steps 1 to 4 are done. Step 5 is partly done: the quiet status line and sound cues for all four events work; plain tool rows, diffs and notifications do not yet. From step 6, the install and uninstall scripts and the marketplace file are done. Pause and resume from step 3 are not built.
+Progress as of version 0.1.0: steps 1 to 4 are done. Step 5 is partly done: the quiet status line, sound cues for all four events, worded diffs with the change report, and the plain dialog for permission prompts and questions work; plain rows for other tools and notifications do not yet. From step 6, the install and uninstall scripts and the marketplace file are done. Pause and resume from step 3 are not built.
 
 ## Step 1: Skeleton
 
@@ -35,7 +35,7 @@ Progress as of version 0.1.0: steps 1 to 4 are done. Step 5 is partly done: the 
 ## Step 5: Terminal experience
 
 1. Replace the spinner with the quiet status line.
-2. Rewrite tool rows and diffs as plain sentences.
+2. Rewrite tool rows and diffs as plain sentences. Diffs are done, see the accessible diffs document.
 3. Add sound cues and `/sounds`.
 4. Add notifications and `/notify`.
 

@@ -68,9 +68,12 @@ For a table with the columns Name and Size, and the rows "app.ts, 4 kilobytes" a
 
 When Claude edits a file, Claude Code shows a colored diff. Color means nothing to a screen reader. Blind Claude rewrites diff rows so every changed line starts with a word:
 
-1. "Added line 12:" followed by the new text.
-2. "Removed line 12:" followed by the old text.
-3. A summary line first, such as "Edited register.ts: 3 lines added, 1 removed."
+1. A summary line first, such as "Edited register.ts, lines 40 to 52: 3 lines added, 1 removed."
+2. "Added line 12:" followed by the new text.
+3. "Removed, was line 12:" followed by the old text.
+4. "Changed line 12." followed by "Before:" and "After:" lines.
+
+Larger edits show only the summary. The full rules, and the change report that opens in Notepad++ or Notepad, are in the accessible diffs document, docs/accessible-diffs.md.
 
 ## Speech cleaning
 

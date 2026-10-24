@@ -52,7 +52,7 @@ The report is a plain text file opened in a normal editor window, where nothing 
 
 ### Opening it
 
-1. `/changes` opens the report for the last turn that changed files.
+1. `/changes` opens the report for the last turn that changed files. Only edits made with Claude's editing tools are recorded, not edits made through shell commands, so when there are none it opens the git report instead, as `/changes git` does.
 2. `/changes session` opens every change made in this session, oldest first.
 3. `/changes 2` opens the report for one file only, by its number in the last turn's list.
 4. `/changes auto on` opens the report by itself when a turn that changed files ends. It is off by default, because the window takes focus.

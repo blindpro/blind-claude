@@ -498,6 +498,28 @@ async function openReport($: Engine, changes: readonly FileChange[], title: stri
   return `The change report opened in ${opened.editor}. It covers ${files === 1 ? '1 file' : `${files} files`}. If you do not hear it, press Alt Tab to reach it.`
 }
 
+// Writes a change report of every change since the last commit, from git,
+// and opens it. Answers what to tell the person.
+async function gitReport($: Engine): Promise<string> {
+  const diff = async (args: string[]) => {
+    try {
+      return await $.process.run(['git', ...args], { timeoutMs: 60_000 })
+    } catch {
+      return null
+    }
+  }
+  let ran = await diff(['diff', 'HEAD', '--no-color', '--no-ext-diff'])
+  if (ran === null || ran.exitCode !== 0) ran = await diff(['diff', '--no-color', '--no-ext-diff'])
+  if (ran === null || ran.exitCode !== 0) return 'This folder is not a git repository, or git is not installed.'
+  const changes = parseGitDiff(ran.stdout)
+  const untracked = await diff(['ls-files', '--others', '--exclude-standard'])
+  const newFiles = (untracked?.stdout ?? '').split('\n').map(l => l.trim()).filter(l => l !== '')
+  const footer = newFiles.length > 0 ? [`New files git does not track yet, not shown above: ${newFiles.slice(0, 50).join(', ')}${newFiles.length > 50 ? `, and ${newFiles.length - 50} more` : ''}.`] : undefined
+  if (changes.length === 0) return newFiles.length > 0 ? `No changes to tracked files since the last commit. ${footer![0]}` : 'No changes since the last commit.'
+
+  return openReport($, changes, 'Blind Claude change report: every change since the last commit, from git.', footer)
+}
+
 async function sessionChanges($: Engine): Promise<FileChange[]> {
   return (await read($, changesState)) ?? []
 }
@@ -1256,24 +1278,7 @@ export const register: Register = on => {
       if (lastPreview === null) return { text: 'No edit is waiting for your permission.' }
       return { text: await openReport($, [lastPreview], 'Blind Claude: the change Claude wants to make. It has not been made yet.') }
     }
-    if (first === 'git') {
-      const diff = async (args: string[]) => {
-        try {
-          return await $.process.run(['git', ...args], { timeoutMs: 60_000 })
-        } catch {
-          return null
-        }
-      }
-      let ran = await diff(['diff', 'HEAD', '--no-color', '--no-ext-diff'])
-      if (ran === null || ran.exitCode !== 0) ran = await diff(['diff', '--no-color', '--no-ext-diff'])
-      if (ran === null || ran.exitCode !== 0) return { text: 'This folder is not a git repository, or git is not installed.' }
-      const changes = parseGitDiff(ran.stdout)
-      const untracked = await diff(['ls-files', '--others', '--exclude-standard'])
-      const newFiles = (untracked?.stdout ?? '').split('\n').map(l => l.trim()).filter(l => l !== '')
-      const footer = newFiles.length > 0 ? [`New files git does not track yet, not shown above: ${newFiles.slice(0, 50).join(', ')}${newFiles.length > 50 ? `, and ${newFiles.length - 50} more` : ''}.`] : undefined
-      if (changes.length === 0) return { text: newFiles.length > 0 ? `No changes to tracked files since the last commit. ${footer![0]}` : 'No changes since the last commit.' }
-      return { text: await openReport($, changes, 'Blind Claude change report: every change since the last commit, from git.', footer) }
-    }
+    if (first === 'git') return { text: await gitReport($) }
     if (first === 'session') {
       const changes = await sessionChanges($)
       if (changes.length === 0) return { text: 'Claude has not changed any files in this session yet.' }
@@ -1281,7 +1286,8 @@ export const register: Register = on => {
     }
 
     const changes = await lastTurnChanges($)
-    if (changes.length === 0) return { text: 'Claude has not changed any files in this session yet. /changes git shows changes since the last commit.' }
+    // Edits made through shell commands are not recorded, so git is asked.
+    if (changes.length === 0) return { text: `Claude has not changed any files with its editing tools in this session, so this is what git shows. ${await gitReport($)}` }
     const files = filesOf(changes)
     const pickFile = (text: string) => {
       const n = Number(text)

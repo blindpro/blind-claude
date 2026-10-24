@@ -80,7 +80,7 @@ With `/clean off`, both show Claude Code's own panels again.
 
 ### Changes
 
-1. `/changes`: open what Claude changed in the last turn that changed files, in Notepad++ or Notepad.
+1. `/changes`: open what Claude changed in the last turn that changed files, in Notepad++ or Notepad. With no recorded edits, it shows changes since the last commit from git.
 2. `/changes session`, `/changes 2`, `/changes open 2`, `/changes git` and `/changes preview`: the whole session, one file, the file itself, everything since the last commit, and the edit waiting for permission.
 3. `/changes auto`, `/changes before`, `/changes editor`, `/changes view`, `/changes context` and `/changes rows`: how reports open and what they show.
 4. `/changes help` lists them all. The accessible diffs document explains each one.

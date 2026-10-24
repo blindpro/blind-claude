@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { allowKey, answerOf, describeCall, dialogSpeech, parseQuestions, permissionDialog, questionDialog } from './prompts'
+import { QUESTION_KEY, allowKey, answerOf, describeCall, dialogSpeech, focusOrder, parseQuestions, permissionDialog, questionDialog, questionSpeech, wrapFocus } from './prompts'
 
 test('a command permission says what will run, line by line, then asks', () => {
   const dialog = permissionDialog('p1', 'Bash', { command: 'git add .\ngit push', description: 'Push the branch' }, undefined, undefined)
@@ -55,4 +55,15 @@ test('a question with several answers marks what is chosen and ends with done', 
 test('questions in another shape are left to Claude Code', () => {
   expect(parseQuestions({ questions: [] })).toBe(null)
   expect(parseQuestions({ questions: [{ question: 'x', options: [{ nolabel: true }] }] })).toBe(null)
+})
+
+test('the question is the first stop, and the focus wraps past the pane edges', () => {
+  const dialog = permissionDialog('p', 'Bash', { command: 'ls' }, undefined, undefined)
+  const order = focusOrder(dialog, true)
+  expect(order[0]).toBe(QUESTION_KEY)
+  expect(order[order.length - 1]).toBe('typed')
+  expect(focusOrder(dialog, false)).not.toContain('typed')
+  expect(wrapFocus(order, 'typed')).toBe(QUESTION_KEY)
+  expect(wrapFocus(order, QUESTION_KEY)).toBe('typed')
+  expect(questionSpeech(dialog)).toContain('Claude wants to run a command. Command: ls Allow it?')
 })

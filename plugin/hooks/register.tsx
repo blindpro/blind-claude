@@ -23,7 +23,7 @@ import {
   summary,
 } from './diff'
 import type { ReportOptions } from './diff'
-import { ENGINE_ONLY_TOOLS, allowKey, answerOf, dialogSpeech, parseQuestions, permissionDialog, questionDialog } from './prompts'
+import { ENGINE_ONLY_TOOLS, QUESTION_KEY, allowKey, answerOf, dialogSpeech, focusOrder, parseQuestions, permissionDialog, questionDialog, questionSpeech, wrapFocus } from './prompts'
 import type { Question } from './prompts'
 import { RESET_MESSAGE, choose, parseChoice, screenText } from './menu'
 import type { MenuContext, Screen } from './menu'
@@ -164,6 +164,10 @@ const allowedThisSession = new Set<string>()
 // The file the open dialog's answer is written into, and whether its pane is open.
 let answerPath: string | null = null
 let isDialogOpen = false
+// The stop the dialog's focus is on, and whether the pane has a text box,
+// so the focus can wrap past Claude Code's own stops (see wrapFocus).
+let dialogFocus: string | null = null
+let dialogHasInput = false
 // One dialog at a time: the next waits for the one before to be answered.
 let dialogQueue: Promise<unknown> = Promise.resolve()
 
@@ -578,6 +582,7 @@ async function askDialog($: Engine, dialog: Dialog, signal: AbortSignal, isNew: 
     }
   }
   if (isNew) {
+    dialogFocus = QUESTION_KEY
     await playSound($, 'attention')
     if (current.level !== 'none') await speak($, dialogSpeech(dialog), { interrupt: true, isRaw: true })
   }
@@ -896,16 +901,17 @@ export const register: Register = on => {
     const Input = 'Input' in elements ? elements.Input : null
     const dialog = await read($, dialogState)
     if (!dialog) return <Text>Nothing to answer.</Text>
+    dialogHasInput = Input !== null
 
     return (
       <Box flexDirection="column">
-        <Text bold>{dialog.title}</Text>
+        <Button key={QUESTION_KEY} label={dialog.title} plain autoFocus onPress={() => speak($, dialogSpeech(dialog), { interrupt: true, isRaw: true })} />
         {dialog.lines.map(line => (
           <Text>{line}</Text>
         ))}
         {dialog.options.map((option, i) =>
           i < 9 ? (
-            <Button key={option.key} label={option.label} hotkey={String(i + 1)} plain autoFocus={i === 0 ? true : undefined} onPress={() => sendAnswer($, option.key)} />
+            <Button key={option.key} label={option.label} hotkey={String(i + 1)} plain onPress={() => sendAnswer($, option.key)} />
           ) : (
             <Button key={option.key} label={option.label} plain onPress={() => sendAnswer($, option.key)} />
           ),
@@ -917,14 +923,21 @@ export const register: Register = on => {
     )
   })
 
-  // Says the choice the person moves to, so the arrows can be followed by ear.
+  // Says the stop the person moves to, so the arrows can be followed by ear.
+  // Claude Code's own stops in the pane, such as its close mark, are passed
+  // over: the focus wraps around the dialog instead, and Escape still closes.
   on('ui.focus', async ($, e, next) => {
-    const moved = await next(e)
-    if (e.requestId !== DIALOG_PANE || e.origin.kind !== 'person' || e.element === undefined) return moved
+    if (e.requestId !== DIALOG_PANE) return next(e)
     const dialog = await read($, dialogState)
-    const option = dialog?.options.find(o => o.key === e.element)
+    const element = e.element === undefined && e.origin.kind === 'person' && dialog ? wrapFocus(focusOrder(dialog, dialogHasInput), dialogFocus) : e.element
+    const moved = await next(element === e.element ? e : { ...e, element })
+    if (moved.deny !== undefined || element === undefined) return moved
+    dialogFocus = element
+    if (e.origin.kind !== 'person' && e.element !== undefined) return moved
+    const option = dialog?.options.find(o => o.key === element)
     if (option) await speak($, option.spoken, { interrupt: true, isRaw: true })
-    else if (e.element === 'typed' && dialog?.input) await speak($, dialog.input.label, { interrupt: true, isRaw: true })
+    else if (element === QUESTION_KEY && dialog) await speak($, questionSpeech(dialog), { interrupt: true, isRaw: true })
+    else if (element === 'typed' && dialog?.input) await speak($, dialog.input.label, { interrupt: true, isRaw: true })
 
     return moved
   }).catch(($, e, next) => next(e))

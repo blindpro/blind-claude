@@ -16,14 +16,14 @@ A dialog above the prompt, laid out to be read from the top:
 4. The choices, one per line, numbered, with no symbols.
 5. A box to type in, under the choices.
 
-When the dialog opens, the attention sound plays and everything above is spoken, including every choice, followed by "Use up and down arrow and Enter, or press a number."
+When the dialog opens, the attention sound plays and everything above is spoken, including every choice, followed by "Use up and down arrow and Enter, or press a number. Up arrow from the first choice reads the question again."
 
 ## Moving and choosing
 
-1. Up and down arrow move between the choices. Each choice is spoken as you reach it, with its place, such as "No. 3 of 4."
-2. Enter chooses the one you are on.
+1. The focus starts on the question at the top. Up and down arrow move between the question and the choices. Each choice is spoken as you reach it, with its place, such as "No. 3 of 4."
+2. On the question, the whole question is spoken. Enter there says the question and every choice again. On a choice, Enter chooses it.
 3. A number key chooses that choice straight away.
-4. Down arrow past the last choice reaches the text box. Type there and press Enter to answer in your own words.
+4. Down arrow past the last choice reaches the text box. Type there and press Enter to answer in your own words. Down arrow past the text box goes back to the question, and up arrow from the question goes to the text box.
 5. Escape closes the dialog. For a permission that means no; for a question it means you did not answer, as in Claude Code's own.
 
 ## Permission choices

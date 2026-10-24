@@ -182,10 +182,31 @@ export function questionDialog(id: string, questions: readonly Question[], index
 export function dialogSpeech(dialog: Dialog): string {
   const choices = dialog.options.map((o, i) => `${i + 1}, ${o.label}.`).join(' ')
 
-  return `${dialog.title} ${dialog.lines.join(' ')} ${dialog.options.length} choices: ${choices} Use up and down arrow and Enter, or press a number.`
+  return `${dialog.title} ${dialog.lines.join(' ')} ${dialog.options.length} choices: ${choices} Use up and down arrow and Enter, or press a number. Up arrow from the first choice reads the question again.`
 }
 
 // The answer to one question, as AskUserQuestion's result keeps it.
 export function answerOf(question: Question, chosen: readonly number[]): string {
   return chosen.map(i => question.options[i]?.label ?? '').filter(l => l !== '').join(', ')
+}
+
+// The key of the line at the top of the dialog that holds the question, so
+// the arrows can reach it and Enter on it says the whole dialog again.
+export const QUESTION_KEY = 'question'
+
+// What is spoken when the focus is on the question.
+export function questionSpeech(dialog: Dialog): string {
+  return `${dialog.title} ${dialog.lines.join(' ')} Press Enter to hear the choices again.`
+}
+
+// The dialog's stops in the order the arrows move through them.
+export function focusOrder(dialog: Dialog, hasInput: boolean): string[] {
+  return [QUESTION_KEY, ...dialog.options.map(o => o.key), ...(dialog.input && hasInput ? ['typed'] : [])]
+}
+
+// Where the focus goes instead of one of Claude Code's own stops in the pane,
+// such as its close mark: off the last stop it wraps to the top, off any
+// other it wraps to the bottom.
+export function wrapFocus(order: readonly string[], last: string | null): string {
+  return last === order[order.length - 1] ? order[0]! : order[order.length - 1]!
 }

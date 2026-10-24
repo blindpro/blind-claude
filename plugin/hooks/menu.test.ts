@@ -26,12 +26,14 @@ test('reads only a number on its own as a choice', () => {
 test('the main menu numbers every setting with its value', () => {
   const text = screenText({ kind: 'main' }, CTX)
   expect(text).toContain('1. Speech level, some.')
-  expect(text).toContain('3. Rate, 0.')
+  expect(text).toContain('2. Speech engine, auto.')
+  expect(text).toContain('4. Rate, 0.')
   expect(text).toContain('0. Close the menu.')
 })
 
 test('choosing from the main menu opens that setting', () => {
-  expect(choose({ kind: 'main' }, 2, CTX)).toEqual({ kind: 'open', screen: { kind: 'voice' } })
+  expect(choose({ kind: 'main' }, 2, CTX)).toEqual({ kind: 'open', screen: { kind: 'engine' } })
+  expect(choose({ kind: 'main' }, 3, CTX)).toEqual({ kind: 'open', screen: { kind: 'voice' } })
   expect(choose({ kind: 'main' }, 0, CTX)).toEqual({ kind: 'close' })
   expect(choose({ kind: 'main' }, 9, CTX)).toEqual({ kind: 'open', screen: { kind: 'main' }, message: 'There is no option 9.' })
 })
@@ -63,7 +65,12 @@ test('an event can be turned off, or given one sound that plays', () => {
 })
 
 test('reset asks first', () => {
-  expect(choose({ kind: 'main' }, 7, CTX)).toEqual({ kind: 'open', screen: { kind: 'reset' } })
+  expect(choose({ kind: 'main' }, 8, CTX)).toEqual({ kind: 'open', screen: { kind: 'reset' } })
   expect(choose({ kind: 'reset' }, 1, CTX)).toEqual({ kind: 'reset', screen: { kind: 'main' } })
   expect(choose({ kind: 'reset' }, 2, CTX)).toEqual({ kind: 'open', screen: { kind: 'main' } })
+})
+
+test('the speech engine can be NVDA, the Windows voice, or whichever is there', () => {
+  expect(screenText({ kind: 'engine' }, CTX)).toContain('1. auto: NVDA while it is running, otherwise the Windows voice, current.')
+  expect(choose({ kind: 'engine' }, 2, CTX)).toEqual({ kind: 'set', change: { engine: 'nvda' }, message: 'Speech engine set to nvda.', screen: { kind: 'main' } })
 })

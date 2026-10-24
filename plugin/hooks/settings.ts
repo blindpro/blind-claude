@@ -9,8 +9,12 @@ export type SoundEvent = (typeof SOUND_EVENTS)[number]
 export type SoundChoice = { isOn: boolean; pick: string }
 export type CleanMode = 'on' | 'off' | 'words'
 
+// Who speaks. "auto": NVDA while it runs, else the Windows voices.
+export type SpeechEngine = 'auto' | 'nvda' | 'windows'
+
 export type Settings = {
   level: Level
+  engine: SpeechEngine
   voice: string | null
   rate: number
   volume: number
@@ -21,9 +25,11 @@ export type Settings = {
 
 export const LEVELS: readonly Level[] = ['all', 'most', 'some', 'none']
 export const CLEAN_MODES: readonly CleanMode[] = ['on', 'off', 'words']
+export const ENGINES: readonly SpeechEngine[] = ['auto', 'nvda', 'windows']
 
 export const DEFAULTS: Settings = {
   level: 'some',
+  engine: 'auto',
   voice: null,
   rate: 0,
   volume: 100,
@@ -45,6 +51,7 @@ export function sanitize(value: unknown): Partial<Settings> {
   const v = value as Record<string, unknown>
   const out: Partial<Settings> = {}
   if (LEVELS.includes(v.level as Level)) out.level = v.level as Level
+  if (ENGINES.includes(v.engine as SpeechEngine)) out.engine = v.engine as SpeechEngine
   if (typeof v.voice === 'string' || v.voice === null) out.voice = v.voice as string | null
   if (typeof v.rate === 'number') out.rate = clamp(v.rate, -10, 10)
   if (typeof v.volume === 'number') out.volume = clamp(v.volume, 0, 100)
@@ -75,6 +82,7 @@ export function clamp(n: number, low: number, high: number): number {
 export function describeSettings(s: Settings): string {
   return [
     `Speech level: ${s.level}.`,
+    `Speech engine setting: ${s.engine}.`,
     `Voice: ${s.voice ?? 'system default'}.`,
     `Rate: ${s.rate}.`,
     `Volume: ${s.volume}.`,

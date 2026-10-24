@@ -7,18 +7,19 @@ Every Blind Claude slash command and setting in one place. All settings are save
 Type `/blind` to open the settings menu. It is printed and spoken as a numbered list, one setting per line with its current value:
 
 1. Speech level.
-2. Voice.
-3. Rate.
-4. Volume.
-5. Symbol cleaning.
-6. Sounds.
-7. Reset all settings to defaults.
+2. Speech engine.
+3. Voice.
+4. Rate.
+5. Volume.
+6. Symbol cleaning.
+7. Sounds.
+8. Reset all settings to defaults.
 
 Type a number and press Enter to open that setting. Its choices are listed the same way, with the one in use marked as current. For example, symbol cleaning lists 1 on, 2 off and 3 words. Type the number of a choice and press Enter: the setting is saved, the change is confirmed, and you are back at the main menu.
 
 How each part behaves:
 
-1. Speech level, voice and symbol cleaning: choosing returns you to the main menu. The system default voice is listed last, so the voice numbers match the ones `/voices` uses.
+1. Speech level, speech engine, voice and symbol cleaning: choosing returns you to the main menu. The speech engine lists 1 auto, 2 nvda and 3 windows. The system default voice is listed last, so the voice numbers match the ones `/voices` uses.
 2. Rate and volume: 1 is faster or louder, 2 is slower or quieter, and 3 goes back to normal. These stay open after each choice so you can press 1 several times and hear the change each time. Rate moves one step, volume ten.
 3. Sounds: 1 turns all sounds on or off. 2 to 5 open the done, start, attention and error events. Each event lists on, off, a random sound each time, and then every sound file for that event. Choosing a file plays it and makes it the sound for that event. Adding and removing your own sounds still uses the `/sounds add` and `/sounds remove` commands.
 4. Reset asks first: 1 resets, 2 leaves everything as it is.
@@ -50,7 +51,19 @@ The commands below still work with words after them, for when you already know w
 2. `/speak all`, `/speak most`, `/speak some`, `/speak none`: set the speech level.
 3. `/speak stop`: stop speaking and clear the queue.
 4. `/speak repeat`: say the last spoken reply again.
-5. `/speak pause` and `/speak resume`: planned, not built yet.
+5. `/speak auto`: speak through NVDA while it is running, and with the Windows voice otherwise. Default.
+6. `/speak nvda`: speak only through NVDA. Nothing is spoken while NVDA is not running.
+7. `/speak windows`: speak only with the Windows voice, as before.
+8. `/speak pause` and `/speak resume`: planned, not built yet.
+
+### Plain built in commands
+
+Claude Code draws `/usage` and `/context` as panels of bars, grids and symbols. While symbol cleaning is on, Blind Claude answers both in plain sentences instead:
+
+1. `/usage`: each plan limit with the percent used and when it resets, what the session has cost, and how full the context is.
+2. `/context`: how full the context is, then one line per part of it, such as the system prompt and messages, with tokens and percent.
+
+With `/clean off`, both show Claude Code's own panels again.
 
 ### Voice
 
@@ -94,12 +107,13 @@ Your own sounds are kept in your local app data folder, under BlindClaude, sound
 ## Settings and defaults
 
 1. Speech level: some.
-2. Voice: the system default.
-3. Rate: 0.
-4. Volume: 100.
-5. Cleaning: on.
-6. Sounds: on, for every event, with a random sound each time.
-7. Notifications, the working update interval, and the screen reader overlap setting are planned, not built yet.
+2. Speech engine: auto, so NVDA speaks whenever it is running.
+3. Voice: the system default.
+4. Rate: 0, for the Windows voice.
+5. Volume: 100, for the Windows voice.
+6. Cleaning: on.
+7. Sounds: on, for every event, with a random sound each time.
+8. Notifications, the working update interval, and the screen reader overlap setting are planned, not built yet.
 
 ## Where settings live
 

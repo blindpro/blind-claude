@@ -2,8 +2,8 @@
 // number does there. register.tsx keeps which screen is open, applies the
 // changes and plays or speaks what an answer asks for.
 
-import { CLEAN_MODES, LEVELS, SOUND_EVENTS, clamp } from './settings'
-import type { CleanMode, Settings, SoundEvent } from './settings'
+import { CLEAN_MODES, ENGINES, LEVELS, SOUND_EVENTS, clamp } from './settings'
+import type { CleanMode, Settings, SoundEvent, SpeechEngine } from './settings'
 import { EVENT_WORDS } from './sounds'
 import type { SoundFile } from './sounds'
 import type { Voice } from './speech'
@@ -11,6 +11,7 @@ import type { Voice } from './speech'
 export type Screen =
   | { kind: 'main' }
   | { kind: 'level' }
+  | { kind: 'engine' }
   | { kind: 'voice' }
   | { kind: 'rate' }
   | { kind: 'volume' }
@@ -40,6 +41,12 @@ const LEVEL_WORDS: Record<Settings['level'], string> = {
   most: 'replies and actions such as edits and commands',
   some: 'the final answer only',
   none: 'nothing',
+}
+
+const ENGINE_WORDS: Record<SpeechEngine, string> = {
+  auto: 'NVDA while it is running, otherwise the Windows voice',
+  nvda: 'NVDA only, in its own voice and settings',
+  windows: 'the Windows voice only',
 }
 
 const CLEAN_WORDS: Record<CleanMode, string> = {
@@ -91,6 +98,7 @@ function screenParts(screen: Screen, ctx: MenuContext): { title: string; items: 
         title: `Blind Claude settings. Speech engine: ${ctx.engine}.`,
         items: [
           `Speech level, ${s.level}`,
+          `Speech engine, ${s.engine}`,
           `Voice, ${s.voice ?? 'system default'}`,
           `Rate, ${s.rate}`,
           `Volume, ${s.volume}`,
@@ -103,6 +111,11 @@ function screenParts(screen: Screen, ctx: MenuContext): { title: string; items: 
       return {
         title: `Speech level, now ${s.level}. How much is spoken:`,
         items: LEVELS.map(level => current(`${level}: ${LEVEL_WORDS[level]}`, level === s.level)),
+      }
+    case 'engine':
+      return {
+        title: `Speech engine, now ${s.engine}. Voice, rate and volume apply to the Windows voice; NVDA uses its own.`,
+        items: ENGINES.map(engine => current(`${engine}: ${ENGINE_WORDS[engine]}`, engine === s.engine)),
       }
     case 'voice':
       return { title: `Voice, now ${s.voice ?? 'system default'}.`, items: voiceItems(ctx) }
@@ -168,6 +181,7 @@ function parent(screen: Screen): Screen | null {
 
 const MAIN_SCREENS: readonly Screen[] = [
   { kind: 'level' },
+  { kind: 'engine' },
   { kind: 'voice' },
   { kind: 'rate' },
   { kind: 'volume' },
@@ -205,6 +219,10 @@ export function choose(screen: Screen, choice: number, ctx: MenuContext): MenuAn
     case 'level': {
       const level = LEVELS[index]!
       return { kind: 'set', change: { level }, message: `Speech level set to ${level}.`, screen: main }
+    }
+    case 'engine': {
+      const engine = ENGINES[index]!
+      return { kind: 'set', change: { engine }, message: `Speech engine set to ${engine}.`, screen: main }
     }
     case 'voice': {
       const voice = (ctx.voices ?? [])[index]

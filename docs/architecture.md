@@ -54,7 +54,7 @@ Rewriting a row in `ui.render` only changes what is drawn. It never changes what
 ### Commands and settings
 
 1. `session.start`: registers the slash commands and loads saved settings.
-2. `command.run`: answers `/speak`, `/voices`, `/rate`, `/volume`, `/clean`, `/sounds` and `/blind`. Each one typed on its own opens its part of the settings menu.
+2. `command.run`: answers `/speak`, `/voices`, `/rate`, `/volume`, `/clean`, `/sounds` and `/blind`. Each one typed on its own opens its part of the settings menu. It also answers the built in `/usage` and `/context` in plain sentences, from `$.session.usage`, since Claude Code draws those as panels the cleaner never sees. The sentences are built in `plugin/hooks/usage.ts`.
 3. `plugin/hooks/menu.ts`: the settings menu screens and what each number does there, with no engine calls, so it is easy to test.
 4. `$.store`: keeps settings between sessions.
 5. `userConfig` in the manifest: exposes the main settings in the Claude Code config menu as well.
@@ -83,7 +83,7 @@ Many users run NVDA, JAWS or Narrator alongside Claude Code. Two voices talking 
 
 1. The default speech level is "some", which only speaks the final reply.
 2. A setting turns off Blind Claude's own speech for anything the screen reader already reads, such as text drawn in the terminal, while still allowing sound cues.
-3. A later release may speak through the screen reader itself, using the NVDA controller client, so there is one voice and one set of controls. See the roadmap.
+3. When NVDA is running, Blind Claude speaks through NVDA itself, using the NVDA controller client, so there is one voice and one set of controls. See the speech document.
 
 ## Developing and loading the mod
 

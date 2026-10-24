@@ -16,7 +16,7 @@ Claude Code is built for people who look at the terminal. It draws boxes, bullet
 Version 0.1.0, early and in active development. Working now:
 
 1. Symbol cleaning of Claude's replies, and a system prompt section that asks Claude to write plainly.
-2. Speech at four levels through the Windows voices, with stop and repeat.
+2. Speech at four levels through NVDA, or the Windows voices when NVDA is not running, with stop and repeat.
 3. Listing, testing and choosing a voice, plus rate and volume.
 4. Sound cues for four events: done, start, attention and error. Five done sounds come built in, and you can add your own for any event.
 5. A still "Working." line in place of the animated spinner, and "Done, took 12 seconds." at the end of a turn.
@@ -32,7 +32,12 @@ Not built yet: plain tool rows and diffs, notifications, and pause and resume. S
 
 The installed mod reads from this folder, so any change here applies in the next session. Running the installer again updates an existing install.
 
-Tip: if you use NVDA, type `/voices nvda` to choose the voice named "NVDA Sapi" and hear Blind Claude in your NVDA voice.
+If NVDA is running, Blind Claude speaks through it, in your NVDA voice and settings, using the NVDA controller client that comes with the mod. When NVDA is not running it uses the Windows voice. `/speak nvda` uses NVDA only, and `/speak windows` the Windows voice only.
+
+To install straight from GitHub without downloading this folder, type these two commands in Claude Code, then start a new session:
+
+1. `/plugin marketplace add blindpro/blind-claude`
+2. `/plugin install blind-claude@blind-claude`
 
 To try the mod for one session without installing it, run `claude --plugin-dir plugin` from this folder.
 
@@ -67,12 +72,14 @@ These work now, apart from the ones marked as planned in the commands document.
 1. `/speak all`, `/speak most`, `/speak some`, `/speak none`: choose how much is spoken.
 2. `/speak stop`: stop talking right now.
 3. `/speak repeat`: say the last reply again.
-4. `/voices`: list the installed voices and choose one by number.
-5. `/voices 3` or `/voices Zira`: choose a voice.
-6. `/rate` and `/volume`: speed and loudness.
-7. `/clean on`, `/clean off` or `/clean words`: symbol cleaning.
-8. `/sounds`: sound cues. `/sounds help` lists the sound commands.
-9. `/blind`: open the settings menu. Type a number and press Enter to pick a setting, then a number for its choice. 0 goes back. `/blind status` reads every setting in one list, `/blind help` lists every command, and `/blind restart` starts speech again if it has stopped.
+4. `/speak auto`, `/speak nvda`, `/speak windows`: who speaks. Auto uses NVDA while it is running.
+5. `/usage` and `/context`: answered in plain sentences instead of bars and grids, while cleaning is on.
+6. `/voices`: list the installed voices and choose one by number.
+7. `/voices 3` or `/voices Zira`: choose a voice.
+8. `/rate` and `/volume`: speed and loudness.
+9. `/clean on`, `/clean off` or `/clean words`: symbol cleaning.
+10. `/sounds`: sound cues. `/sounds help` lists the sound commands.
+11. `/blind`: open the settings menu. Type a number and press Enter to pick a setting, then a number for its choice. 0 goes back. `/blind status` reads every setting in one list, `/blind help` lists every command, and `/blind restart` starts speech again if it has stopped.
 
 ## Platform
 
@@ -81,4 +88,5 @@ Blind Claude is developed and tested first on Windows 11 with NVDA. macOS and Li
 ## Requirements
 
 1. Claude Code with support for plugins that use function hooks.
-2. Windows 10 or 11 for the first release. PowerShell is used to reach the Windows speech voices.
+2. Windows 10 or 11 for the first release. PowerShell is used to reach NVDA and the Windows speech voices.
+3. NVDA is optional. Without it, the Windows voices speak.

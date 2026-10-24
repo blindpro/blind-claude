@@ -66,7 +66,25 @@ Speech is spoken in order, one item at a time. To keep it from falling far behin
 
 ## Speech engines
 
-The engine is the program that turns text into sound. Blind Claude tries them in this order and uses the first one that works.
+The engine is the program that turns text into sound. On Windows, the speech engine setting picks it:
+
+1. `auto`, the default: NVDA while it is running, and the Windows voice when it is not. The check is made as each thing is spoken, so starting or closing NVDA in the middle of a session just works.
+2. `nvda`: only NVDA. Nothing is spoken while NVDA is not running, so you never hear a different voice.
+3. `windows`: only the Windows voice.
+
+Change it with `/speak auto`, `/speak nvda` or `/speak windows`, or with item 2 of the `/blind` menu. `/blind status` says which engine is speaking right now.
+
+### Windows: NVDA
+
+Blind Claude speaks through NVDA with the NVDA controller client, the library NV Access publishes for programs that want to talk through NVDA. The speech server loads it and hands NVDA each piece of text. This gives:
+
+1. NVDA's own voice, rate, volume and speech settings. Blind Claude's voice, rate and volume settings do not apply, so change those in NVDA.
+2. One voice for everything, so Blind Claude never talks over NVDA in a second voice.
+3. Stopping with NVDA's own keys: Control stops speech, as it does for anything NVDA says. `/speak stop` works too.
+
+The library is in the mod's `plugin/lib/nvda` folder, one copy for each processor type, and the speech server picks the one that matches it. It is the official build from NV Access, version 2026.2, under the GNU Lesser General Public License version 2.1. Blind Claude uses only its three oldest functions, checking that NVDA runs, speaking and stopping, so older NVDA versions work too.
+
+Sound cues still play through Windows, not NVDA.
 
 ### Windows: SAPI through PowerShell
 
@@ -91,10 +109,6 @@ Claude Code offers `$.audio.speak`, which uses the platform's own synthesizer. O
 ### Linux
 
 On Linux, Blind Claude uses `spd-say` from Speech Dispatcher if it is installed, and `espeak-ng` otherwise.
-
-### Through the screen reader
-
-A later release may send speech to NVDA through the NVDA controller client, so it speaks in the screen reader's own voice and stops with the screen reader's own keys. See the roadmap.
 
 ## If speech fails
 

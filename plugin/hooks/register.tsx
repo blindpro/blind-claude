@@ -13,13 +13,14 @@ import {
   CLEAN_MODES,
   SOUND_EVENTS,
   DEFAULTS,
+  ENGINES,
   LEVELS,
   SETTINGS_KEY,
   clamp,
   describeSettings,
   sanitize,
 } from './settings'
-import type { CleanMode, Level, Settings, SoundEvent } from './settings'
+import type { CleanMode, Level, Settings, SoundEvent, SpeechEngine } from './settings'
 import { SOUNDS_HELP, chooseSound, findSound, isPlayable, isSoundEvent, listText, overviewText, sortSounds } from './sounds'
 import type { SoundFile } from './sounds'
 import {
@@ -40,6 +41,7 @@ import {
   spoolName,
 } from './speech'
 import type { Voice } from './speech'
+import { contextText, usageText } from './usage'
 
 type Engine = EngineInterface
 
@@ -58,6 +60,7 @@ const PLAIN_WRITING = [
 const HELP = [
   'Blind Claude commands:',
   '/speak all, most, some or none: choose how much is spoken.',
+  '/speak auto, nvda or windows: who speaks. auto uses NVDA while it is running, otherwise the Windows voice.',
   '/speak stop: stop speaking now.',
   '/speak repeat: say the last reply again.',
   '/voices: list voices. /voices and a number or name: choose one. /voices test and a number or name: hear a sample.',
@@ -69,6 +72,7 @@ const HELP = [
   '/speak, /voices, /rate, /volume, /clean or /sounds on their own open that part of the menu.',
   '/blind status: current settings in one list. /blind reset: back to defaults.',
   '/blind restart: start the speech server again if speech has stopped.',
+  '/usage and /context are answered in plain sentences while symbol cleaning is on.',
 ].join('\n')
 
 type Command = Record<string, unknown>
@@ -97,6 +101,9 @@ let isWindows: boolean | null = null
 // from being started over and over.
 let serverStarts: number[] = []
 let voicesWaiter: ((json: string) => void) | null = null
+// The engine the speech server last said it speaks with: nvda, windows or none.
+let engineNow = ''
+let engineWaiter: (() => void) | null = null
 // The settings menu screen open now, or null when the menu is closed.
 let menu: Screen | null = null
 
@@ -113,7 +120,7 @@ async function saveSettings($: Engine, change: Partial<Settings>): Promise<void>
 }
 
 function voiceConfig(): Command[] {
-  const config = { op: 'config', voice: current.voice ?? '', rate: current.rate, volume: current.volume }
+  const config = { op: 'config', engine: current.engine, voice: current.voice ?? '', rate: current.rate, volume: current.volume }
 
   return current.voice === null ? [{ op: 'default-voice' }, config] : [config]
 }
@@ -257,6 +264,7 @@ async function startSpeechServer($: Engine): Promise<Server | null> {
   const ready = new Promise<boolean>(resolve => {
     settle = resolve
   })
+  engineNow = ''
   const spool = `${temp}\\blind-claude\\${Math.floor(now)}`
   const server: Server = { spool, state: 'starting', seq: 0, queue: voiceConfig(), ready, settle }
   bridge = server
@@ -286,6 +294,9 @@ async function startSpeechServer($: Engine): Promise<Server | null> {
             server.queue = []
             for (const command of queued) await writeCommand($, server, command)
             server.settle(true)
+          } else if (line.startsWith('ENGINE ')) {
+            engineNow = line.slice('ENGINE '.length)
+            engineWaiter?.()
           } else if (line.startsWith('VOICES ')) {
             voicesWaiter?.(line.slice('VOICES '.length))
           } else if (line.startsWith('STOP ')) {
@@ -315,12 +326,28 @@ async function startSpeechServer($: Engine): Promise<Server | null> {
   return server
 }
 
+// NVDA may have started or closed since the server last spoke, so ask it
+// which engine it would use now, waiting a moment for the answer.
+async function refreshEngine($: Engine): Promise<void> {
+  if (bridge?.state !== 'ready') return
+  const answer = new Promise<void>(resolve => {
+    engineWaiter = resolve
+  })
+  if (await writeCommand($, bridge, { op: 'engine' })) await Promise.race([answer, $.clock.sleep(1500)])
+  engineWaiter = null
+}
+
 function engineName(): string {
   if (isWindows === false) return 'Claude Code built in speech'
-  if (bridge?.state === 'ready') return 'Windows speech server'
-  if (bridge?.state === 'starting') return 'Windows speech server, starting'
+  if (bridge?.state === 'ready') {
+    if (engineNow === 'nvda') return 'NVDA'
+    if (engineNow === 'windows') return 'Windows voice'
+    if (engineNow === 'none') return current.engine === 'nvda' ? 'NVDA, not running, so nothing is spoken' : 'none available'
+    return 'speech server'
+  }
+  if (bridge?.state === 'starting') return 'speech server, starting'
 
-  return 'Windows speech server, stopped. Type /blind restart to start it'
+  return 'speech server stopped. Type /blind restart to start it'
 }
 
 // Fetches only what the screen needs: voices for the voice list (and for
@@ -328,6 +355,7 @@ function engineName(): string {
 async function menuContext($: Engine, screen: Screen, needsVoices = false): Promise<MenuContext> {
   const voices = screen.kind === 'voice' || needsVoices ? await requestVoices($) : null
   const files = screen.kind === 'event' ? await soundFiles($, screen.event) : []
+  if (screen.kind === 'main') await refreshEngine($)
 
   return { settings: current, engine: engineName(), voices, files }
 }
@@ -344,14 +372,14 @@ async function showScreen($: Engine, screen: Screen, message?: string): Promise<
 
 async function applyChange($: Engine, change: Partial<Settings>): Promise<void> {
   await saveSettings($, change)
-  if ('voice' in change || 'rate' in change || 'volume' in change) await sendVoiceConfig($)
+  if ('engine' in change || 'voice' in change || 'rate' in change || 'volume' in change) await sendVoiceConfig($)
   if ('clean' in change) $.ui.invalidate('ui.render')
   if (change.level === 'none') await stopSpeech($)
 }
 
 // Answers a number typed while the menu is open.
 async function answerMenu($: Engine, screen: Screen, choice: number): Promise<string> {
-  const answer = choose(screen, choice, await menuContext($, screen, screen.kind === 'main' && choice === 2))
+  const answer = choose(screen, choice, await menuContext($, screen, screen.kind === 'main' && choice === 3))
   if (answer.kind === 'close') {
     menu = null
     if (current.level !== 'none') await speak($, 'Menu closed.', { interrupt: true, isRaw: true })
@@ -384,7 +412,7 @@ export const register: Register = on => {
     await loadSettings($)
 
     const commands = [
-      { name: 'speak', description: 'Blind Claude: set how much is spoken, or stop and repeat speech', argumentHint: '[all|most|some|none|stop|repeat]' },
+      { name: 'speak', description: 'Blind Claude: set how much is spoken and who speaks, or stop and repeat speech', argumentHint: '[all|most|some|none|stop|repeat|auto|nvda|windows]' },
       { name: 'voices', description: 'Blind Claude: list, test and choose a speech voice', argumentHint: '[number|name|test <voice>|default]' },
       { name: 'rate', description: 'Blind Claude: set the speech speed', argumentHint: '[-10 to 10|faster|slower]' },
       { name: 'volume', description: 'Blind Claude: set the speech volume', argumentHint: '[0 to 100]' },
@@ -437,6 +465,22 @@ export const register: Register = on => {
 
     return next({ ...e, props: { ...e.props, text: cleanForDisplay(e.props.text, current.clean) } })
   })
+
+  // /usage and /context open panels of bars and grids that the cleaning
+  // above never sees, so while cleaning is on they answer in sentences.
+  on('command.run', { command: 'usage' }, async ($, e, next) => {
+    await loadSettings($)
+    if (current.clean === 'off') return next(e)
+
+    return { text: usageText(await $.session.usage(), await $.clock.now()) }
+  }).catch(($, e, next) => next(e))
+
+  on('command.run', { command: 'context' }, async ($, e, next) => {
+    await loadSettings($)
+    if (current.clean === 'off') return next(e)
+
+    return { text: contextText(await $.session.usage({ breakdown: 'summary' })) }
+  }).catch(($, e, next) => next(e))
 
   // A still status line instead of the animated spinner.
   on('ui.render', { component: 'Spinner' }, ($, e, next) => {
@@ -555,6 +599,13 @@ export const register: Register = on => {
       await speak($, lastReply, { interrupt: true })
       return { text: 'Repeating the last reply.' }
     }
+    if (ENGINES.includes(choice as SpeechEngine)) {
+      await saveSettings($, { engine: choice as SpeechEngine })
+      await sendVoiceConfig($)
+      await refreshEngine($)
+      await speak($, `Speech engine ${choice}.`, { interrupt: true, isRaw: true })
+      return { text: `Speech engine set to ${choice}. Speaking with: ${engineName()}.` }
+    }
     if (LEVELS.includes(choice as Level)) {
       await saveSettings($, { level: choice as Level })
       if (choice === 'none') await stopSpeech($)
@@ -562,7 +613,7 @@ export const register: Register = on => {
       return { text: `Speech level set to ${choice}.` }
     }
 
-    return { text: `Unknown option "${choice}". Use all, most, some, none, stop or repeat.` }
+    return { text: `Unknown option "${choice}". Use all, most, some, none, stop, repeat, auto, nvda or windows.` }
   }).catch(commandFailed)
 
   on('command.run', { command: 'voices' }, async ($, e) => {
@@ -761,6 +812,7 @@ export const register: Register = on => {
       return { text: 'Speech server restarted.' }
     }
     if (choice === 'status') {
+      await refreshEngine($)
       const summary = `${describeSettings(current)}\nSpeech engine: ${engineName()}.\nType /blind help for all commands.`
       await speak($, summary, { interrupt: true, isRaw: true })
       return { text: summary }

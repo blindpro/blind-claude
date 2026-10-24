@@ -48,14 +48,13 @@ Progress as of version 0.1.0: steps 1 to 4 are done. Step 5 is partly done: the 
 ## Later
 
 1. OneCore voices on Windows for more natural speech.
-2. Speaking through NVDA directly with the NVDA controller client.
-3. A keyboard shortcut to stop speech, if Claude Code allows a mod to bind one.
-4. macOS and Linux testing.
-5. Per project settings, such as a quieter speech level in one repository.
+2. A keyboard shortcut to stop speech, if Claude Code allows a mod to bind one.
+3. macOS and Linux testing.
+4. Per project settings, such as a quieter speech level in one repository.
 
 ## Open questions
 
 1. Can a mod bind a key that works while the prompt has focus? This decides how stop speech works.
 2. Answered: Claude Code's `$.audio.play` does not play sounds on Windows, so sounds go through the PowerShell speech server, as WAV files.
-3. Answered: the Windows SAPI voice list includes "NVDA Sapi" when NVDA is installed, which speaks through NVDA. This may make the NVDA controller client unnecessary.
+3. Answered: the Windows SAPI voice list includes "NVDA Sapi" when NVDA is installed, which speaks through NVDA. It had to be chosen by hand and could fall silent, so Blind Claude now speaks through NVDA with the NVDA controller client instead.
 4. How does NVDA react to the rewritten rows? Does it read them once, or again on every redraw?

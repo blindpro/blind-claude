@@ -5,16 +5,23 @@
 # them, and acts on them. Replies are single lines on standard output:
 #   READY                 the spool folder exists and commands are accepted
 #   VOICES <json>         answer to a "voices" command
+#   ENGINE <name>         the engine speaking now: nvda, windows or none
 #   ERROR <text>          something went wrong with one command
 #   STOP <text>           why the server is about to exit
 #
 # Commands:
 #   { "op": "speak", "text": "...", "interrupt": false }
 #   { "op": "stop" }
-#   { "op": "config", "voice": "Microsoft Zira Desktop", "rate": 0, "volume": 100 }
+#   { "op": "config", "voice": "Microsoft Zira Desktop", "rate": 0, "volume": 100, "engine": "auto" }
 #   { "op": "play", "path": "C:\\...\\done-1.wav" }
 #   { "op": "voices" }
+#   { "op": "engine" }      asks for an ENGINE line
 #   { "op": "quit" }
+#
+# The engine setting: "auto" speaks through NVDA while it runs and through
+# the Windows voices otherwise, "nvda" only through NVDA, "windows" only
+# through the Windows voices. NVDA is reached with its controller client
+# library in ..\lib\nvda, so it speaks with NVDA's own voice and settings.
 
 param(
     [Parameter(Mandatory = $true)][string]$Spool
@@ -28,13 +35,104 @@ function Send-Line([string]$line) {
     [Console]::Out.Flush()
 }
 
+$synth = $null
+$synthError = ''
 try {
     Add-Type -AssemblyName System.Speech
     $synth = New-Object System.Speech.Synthesis.SpeechSynthesizer
     $synth.SetOutputToDefaultAudioDevice()
 } catch {
-    Send-Line "STOP speech is not available: $($_.Exception.Message)"
+    $synth = $null
+    $synthError = $_.Exception.Message
+}
+
+# The NVDA controller client that matches this process: a 64 bit
+# PowerShell cannot load the 32 bit library, and the other way round.
+$nvdaLoaded = $false
+$nvdaError = ''
+try {
+    $arch = switch ([string][System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture) {
+        'X86' { 'x86' }
+        'Arm64' { 'arm64' }
+        default { 'x64' }
+    }
+    $nvdaDll = Join-Path $PSScriptRoot "..\lib\nvda\$arch\nvdaControllerClient.dll"
+    if (-not (Test-Path -LiteralPath $nvdaDll)) { throw "the NVDA library is missing: $nvdaDll" }
+    if (-not ('BlindClaude.Nvda' -as [type])) {
+        Add-Type -Namespace BlindClaude -Name Nvda -MemberDefinition @'
+[DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+public static extern IntPtr LoadLibraryW(string path);
+[DllImport("nvdaControllerClient.dll")]
+public static extern int nvdaController_testIfRunning();
+[DllImport("nvdaControllerClient.dll", CharSet = CharSet.Unicode)]
+public static extern int nvdaController_speakText(string text);
+[DllImport("nvdaControllerClient.dll")]
+public static extern int nvdaController_cancelSpeech();
+'@
+    }
+    # Loaded by its full path first, so the imports above find this copy.
+    $fullPath = (Resolve-Path -LiteralPath $nvdaDll).Path
+    if ([BlindClaude.Nvda]::LoadLibraryW($fullPath) -eq [IntPtr]::Zero) {
+        throw "Windows could not load the NVDA library, error $([System.Runtime.InteropServices.Marshal]::GetLastWin32Error())"
+    }
+    $nvdaLoaded = $true
+} catch {
+    $nvdaError = $_.Exception.Message
+}
+
+if ($null -eq $synth -and -not $nvdaLoaded) {
+    Send-Line "STOP speech is not available: $synthError $nvdaError"
     exit 2
+}
+
+$engineMode = 'auto'
+$lastEngine = ''
+$nvdaChecked = [DateTime]::MinValue
+$nvdaRunning = $false
+
+# Asking NVDA is quick, but speech comes in bursts, so the answer is kept
+# for a second.
+function Test-Nvda {
+    if (-not $nvdaLoaded) { return $false }
+    if (((Get-Date) - $script:nvdaChecked).TotalMilliseconds -gt 1000) {
+        $script:nvdaChecked = Get-Date
+        try { $script:nvdaRunning = ([BlindClaude.Nvda]::nvdaController_testIfRunning() -eq 0) }
+        catch { $script:nvdaRunning = $false }
+    }
+    return $script:nvdaRunning
+}
+
+# Which engine speaks now, told to the mod whenever it changes.
+function Get-Engine {
+    $engine = switch ($script:engineMode) {
+        'nvda' { if (Test-Nvda) { 'nvda' } else { 'none' } }
+        'windows' { if ($null -ne $synth) { 'windows' } else { 'none' } }
+        default { if (Test-Nvda) { 'nvda' } elseif ($null -ne $synth) { 'windows' } else { 'none' } }
+    }
+    if ($engine -ne $script:lastEngine) {
+        $script:lastEngine = $engine
+        Send-Line "ENGINE $engine"
+    }
+    return $engine
+}
+
+function Stop-Speech {
+    if ($null -ne $synth) { $synth.SpeakAsyncCancelAll() }
+    if ($script:lastEngine -eq 'nvda') {
+        try { [void][BlindClaude.Nvda]::nvdaController_cancelSpeech() } catch { }
+    }
+}
+
+function Say([string]$text) {
+    $engine = Get-Engine
+    if ($engine -eq 'nvda') {
+        if ([BlindClaude.Nvda]::nvdaController_speakText($text) -eq 0) { return }
+        # NVDA closed since it was last asked. Ask again, and in auto mode
+        # say it with the Windows voice instead.
+        $script:nvdaChecked = [DateTime]::MinValue
+        $engine = Get-Engine
+    }
+    if ($engine -eq 'windows') { [void]$synth.SpeakAsync($text) }
 }
 
 New-Item -ItemType Directory -Force -Path $Spool | Out-Null
@@ -56,13 +154,22 @@ $player = $null
 function Invoke-SpoolCommand($cmd) {
     switch ($cmd.op) {
         'speak' {
-            if ($cmd.interrupt) { $synth.SpeakAsyncCancelAll() }
-            if ($cmd.text) { [void]$synth.SpeakAsync([string]$cmd.text) }
+            if ($cmd.interrupt) { Stop-Speech }
+            if ($cmd.text) { Say ([string]$cmd.text) }
         }
         'stop' {
-            $synth.SpeakAsyncCancelAll()
+            Stop-Speech
+        }
+        'engine' {
+            [void](Get-Engine)
+            Send-Line "ENGINE $script:lastEngine"
         }
         'config' {
+            if ($cmd.engine -in @('auto', 'nvda', 'windows')) {
+                $script:engineMode = [string]$cmd.engine
+                [void](Get-Engine)
+            }
+            if ($null -eq $synth) { return }
             if ($null -ne $cmd.voice -and $cmd.voice -ne '') {
                 try { $synth.SelectVoice([string]$cmd.voice) }
                 catch { Send-Line "ERROR voice not found: $($cmd.voice)" }
@@ -73,6 +180,7 @@ function Invoke-SpoolCommand($cmd) {
         'default-voice' {
             # Screen reader bridge voices such as "NVDA Sapi" report success
             # but make no sound here, so prefer a voice that really speaks.
+            if ($null -eq $synth) { return }
             $enabled = @($synth.GetInstalledVoices() | Where-Object { $_.Enabled })
             $real = $enabled | Where-Object { $_.VoiceInfo.Name -notmatch '^(NVDA|JAWS)' } | Select-Object -First 1
             $first = if ($real) { $real } else { $enabled | Select-Object -First 1 }
@@ -87,6 +195,10 @@ function Invoke-SpoolCommand($cmd) {
             }
         }
         'voices' {
+            if ($null -eq $synth) {
+                Send-Line 'VOICES []'
+                return
+            }
             $list = @($synth.GetInstalledVoices() | Where-Object { $_.Enabled } | ForEach-Object {
                 [pscustomobject]@{
                     name    = $_.VoiceInfo.Name
@@ -98,7 +210,7 @@ function Invoke-SpoolCommand($cmd) {
             Send-Line ("VOICES " + (ConvertTo-Json -InputObject $list -Compress -Depth 3))
         }
         'quit' {
-            $synth.SpeakAsyncCancelAll()
+            Stop-Speech
             Send-Line 'STOP asked to quit'
             exit 0
         }
@@ -135,6 +247,8 @@ function Test-ParentAlive {
     }
 }
 
+if (-not $nvdaLoaded) { Send-Line "ERROR NVDA cannot be used: $nvdaError" }
+if ($null -eq $synth) { Send-Line "ERROR the Windows voices cannot be used: $synthError" }
 Send-Line 'READY'
 
 while ($true) {

@@ -1,3 +1,5 @@
+> **AI-generated code notice:** This project's code was written with AI coding tools such as Claude Code and OpenCode.
+
 # Blind Claude
 
 Blind Claude is a mod for Claude Code that makes it easier to use with a screen reader or without sight at all.

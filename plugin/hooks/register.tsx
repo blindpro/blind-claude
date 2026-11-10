@@ -5,7 +5,7 @@
 // hold the pure logic: cleaning text, describing tools, settings.
 
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register } from 'claude-code'
+import type { CommandRunInput, EngineInterface, Register } from 'claude-code'
 
 import type { Dialog, FileChange } from '../types'
 import { cleanForDisplay, cleanForSpeech } from './clean'
@@ -173,6 +173,8 @@ let dialogFocus: string | null = null
 let dialogHasInput = false
 // One dialog at a time: the next waits for the one before to be answered.
 let dialogQueue: Promise<unknown> = Promise.resolve()
+// Whether Claude is working on a turn of the main conversation now.
+let isTurnRunning = false
 
 async function loadSettings($: Engine): Promise<void> {
   if (hasSettings) return
@@ -722,7 +724,24 @@ function word(args: string): [string, string] {
   return space < 0 ? [trimmed.toLowerCase(), ''] : [trimmed.slice(0, space).toLowerCase(), trimmed.slice(space + 1).trim()]
 }
 
-const commandFailed = () => ({ text: 'That Blind Claude command failed. Type /blind help for the list of commands.' })
+type CommandAnswer = { text?: string }
+
+const commandFailed = (): CommandAnswer => ({ text: 'That Blind Claude command failed. Type /blind help for the list of commands.' })
+
+// A command's answer, as it should reach the person. Typed while Claude is
+// working, a command's text would be handed to Claude as a message in the
+// middle of its turn, and Claude would answer it. So then the answer is
+// written to the transcript as notice lines, which Claude never reads.
+function deliver($: Engine, answer: CommandAnswer): CommandAnswer {
+  if (!isTurnRunning || answer.text === undefined) return answer
+  for (const line of answer.text.split('\n')) {
+    if (line.trim() !== '') $.ui.log(line)
+  }
+
+  return {}
+}
+
+const failed = ($: Engine): CommandAnswer => deliver($, commandFailed())
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
@@ -793,14 +812,14 @@ export const register: Register = on => {
     await loadSettings($)
     if (current.clean === 'off') return next(e)
 
-    return { text: usageText(await $.session.usage(), await $.clock.now()) }
+    return deliver($, { text: usageText(await $.session.usage(), await $.clock.now()) })
   }).catch(($, e, next) => next(e))
 
   on('command.run', { command: 'context' }, async ($, e, next) => {
     await loadSettings($)
     if (current.clean === 'off') return next(e)
 
-    return { text: contextText(await $.session.usage({ breakdown: 'summary' })) }
+    return deliver($, { text: contextText(await $.session.usage({ breakdown: 'summary' })) })
   }).catch(($, e, next) => next(e))
 
   // A still status line instead of the animated spinner.
@@ -818,12 +837,14 @@ export const register: Register = on => {
     return <Text dimColor>Done, took {formatDuration(e.props.durationMs)}.</Text>
   })
 
-  // A new message stops any speech still playing. While the settings menu
-  // is open, a number typed at the prompt answers the menu and never reaches
-  // Claude; anything else closes the menu and goes to Claude as usual.
+  // A new message stops any speech still playing; a slash command does not,
+  // so /usage or /context typed while a reply is read leave it reading.
+  // While the settings menu is open, a number typed at the prompt answers
+  // the menu and never reaches Claude; anything else closes the menu and
+  // goes to Claude as usual.
   on('prompt.submit', async ($, e, next) => {
     await loadSettings($)
-    await stopSpeech($)
+    if (e.command === undefined) await stopSpeech($)
     if (menu !== null) {
       const isPerson = e.origin.kind === 'composer' || e.origin.kind === 'bridge'
       const choice = isPerson && e.attachments === undefined ? parseChoice(e.text) : null
@@ -998,7 +1019,10 @@ export const register: Register = on => {
   on('turn.start', async ($, e, next) => {
     await loadSettings($)
     const started = await next(e)
-    if (e.agentId === undefined) await update($, turnState, n => (n ?? 0) + 1)
+    if (e.agentId === undefined) {
+      isTurnRunning = true
+      await update($, turnState, n => (n ?? 0) + 1)
+    }
     await playSound($, 'start')
 
     return started
@@ -1021,6 +1045,7 @@ export const register: Register = on => {
     await loadSettings($)
     const result = await next(e)
     if (e.agentId !== undefined) return result
+    isTurnRunning = false
 
     if (e.reason === 'answer') {
       if (e.answer.trim() !== '') lastReply = e.answer
@@ -1042,323 +1067,336 @@ export const register: Register = on => {
     return result
   }).catch(($, e, next) => next(e))
 
-  on('command.run', { command: 'speak' }, async ($, e) => {
-    await loadSettings($)
-    const [choice] = word(e.args)
-    if (choice === '') return { text: await showScreen($, { kind: 'level' }) }
-    if (choice === 'stop') {
-      await stopSpeech($)
-      return { text: 'Speech stopped.' }
-    }
-    if (choice === 'repeat') {
-      if (lastReply === '') return { text: 'Nothing to repeat yet.' }
-      await speak($, lastReply, { interrupt: true })
-      return { text: 'Repeating the last reply.' }
-    }
-    if (ENGINES.includes(choice as SpeechEngine)) {
-      await saveSettings($, { engine: choice as SpeechEngine })
-      await sendVoiceConfig($)
-      await refreshEngine($)
-      await speak($, `Speech engine ${choice}.`, { interrupt: true, isRaw: true })
-      return { text: `Speech engine set to ${choice}. Speaking with: ${engineName()}.` }
-    }
-    if (LEVELS.includes(choice as Level)) {
-      await saveSettings($, { level: choice as Level })
-      if (choice === 'none') await stopSpeech($)
-      else await speak($, `Speech level ${choice}.`, { interrupt: true, isRaw: true })
-      return { text: `Speech level set to ${choice}.` }
-    }
+  // Each command's answer goes through deliver, so one typed while Claude
+  // is working is not handed to Claude.
+  on('command.run', { command: 'speak' }, async ($, e) => deliver($, await speakCommand($, e))).catch($ => failed($))
+  on('command.run', { command: 'voices' }, async ($, e) => deliver($, await voicesCommand($, e))).catch($ => failed($))
+  on('command.run', { command: 'rate' }, async ($, e) => deliver($, await rateCommand($, e))).catch($ => failed($))
+  on('command.run', { command: 'volume' }, async ($, e) => deliver($, await volumeCommand($, e))).catch($ => failed($))
+  on('command.run', { command: 'clean' }, async ($, e) => deliver($, await cleanCommand($, e))).catch($ => failed($))
+  on('command.run', { command: 'sounds' }, async ($, e) => deliver($, await soundsCommand($, e))).catch($ => failed($))
+  on('command.run', { command: 'changes' }, async ($, e) => deliver($, await changesCommand($, e))).catch($ => failed($))
+  on('command.run', { command: 'blind' }, async ($, e) => deliver($, await blindCommand($, e))).catch($ => failed($))
+}
 
-    return { text: `Unknown option "${choice}". Use all, most, some, none, stop, repeat, auto, nvda or windows.` }
-  }).catch(commandFailed)
+// The Blind Claude commands, each answering what the person typed.
 
-  on('command.run', { command: 'voices' }, async ($, e) => {
-    await loadSettings($)
-    const [first, rest] = word(e.args)
-    if (first === 'default') {
-      await saveSettings($, { voice: null })
-      await sendVoiceConfig($)
-      await speak($, 'Using the default voice.', { interrupt: true, isRaw: true })
-      return { text: 'Using the system default voice.' }
-    }
-
-    const voices = await requestVoices($)
-    if (voices === null) {
-      return { text: 'The voice list is only available on Windows while the speech server is running. Try again in a moment.' }
-    }
-    if (first === '') return { text: await showScreen($, { kind: 'voice' }) }
-
-    const isTest = first === 'test'
-    const query = isTest ? rest : e.args.trim()
-    if (query === '') return { text: 'Say which voice to test, by number or name.' }
-    const matches = findVoice(voices, query)
-    if (matches.length === 0) return { text: `No voice matches "${query}". Type /voices to list them.` }
-    if (matches.length > 1) return { text: `More than one voice matches: ${matches.map(v => v.name).join(', ')}. Be more specific.` }
-    const voice = matches[0]!
-
-    if (isTest) {
-      await sendToServer($, { op: 'config', voice: voice.name })
-      await speak($, `This is ${voice.name}.`, { interrupt: true, isRaw: true })
-      await sendVoiceConfig($)
-      return { text: `Played a sample of ${voice.name}.` }
-    }
-    await saveSettings($, { voice: voice.name })
+async function speakCommand($: Engine, e: CommandRunInput): Promise<CommandAnswer> {
+  await loadSettings($)
+  const [choice] = word(e.args)
+  if (choice === '') return { text: await showScreen($, { kind: 'level' }) }
+  if (choice === 'stop') {
+    await stopSpeech($)
+    return { text: 'Speech stopped.' }
+  }
+  if (choice === 'repeat') {
+    if (lastReply === '') return { text: 'Nothing to repeat yet.' }
+    await speak($, lastReply, { interrupt: true })
+    return { text: 'Repeating the last reply.' }
+  }
+  if (ENGINES.includes(choice as SpeechEngine)) {
+    await saveSettings($, { engine: choice as SpeechEngine })
     await sendVoiceConfig($)
-    await speak($, `Voice changed to ${voice.name}.`, { interrupt: true, isRaw: true })
+    await refreshEngine($)
+    await speak($, `Speech engine ${choice}.`, { interrupt: true, isRaw: true })
+    return { text: `Speech engine set to ${choice}. Speaking with: ${engineName()}.` }
+  }
+  if (LEVELS.includes(choice as Level)) {
+    await saveSettings($, { level: choice as Level })
+    if (choice === 'none') await stopSpeech($)
+    else await speak($, `Speech level ${choice}.`, { interrupt: true, isRaw: true })
+    return { text: `Speech level set to ${choice}.` }
+  }
 
-    return { text: `Voice changed to ${voice.name}.` }
-  }).catch(commandFailed)
+  return { text: `Unknown option "${choice}". Use all, most, some, none, stop, repeat, auto, nvda or windows.` }
+}
 
-  on('command.run', { command: 'rate' }, async ($, e) => {
-    await loadSettings($)
-    const [choice] = word(e.args)
-    if (choice === '') return { text: await showScreen($, { kind: 'rate' }) }
-    let rate = current.rate
-    if (choice === 'faster') rate += 1
-    else if (choice === 'slower') rate -= 1
-    else if (/^-?\d+$/.test(choice)) rate = Number(choice)
-    else return { text: 'Use a number from -10 to 10, or faster, or slower.' }
-    await saveSettings($, { rate: clamp(rate, -10, 10) })
+async function voicesCommand($: Engine, e: CommandRunInput): Promise<CommandAnswer> {
+  await loadSettings($)
+  const [first, rest] = word(e.args)
+  if (first === 'default') {
+    await saveSettings($, { voice: null })
     await sendVoiceConfig($)
-    await speak($, `Rate ${current.rate}.`, { interrupt: true, isRaw: true })
+    await speak($, 'Using the default voice.', { interrupt: true, isRaw: true })
+    return { text: 'Using the system default voice.' }
+  }
 
-    return { text: `Speech rate set to ${current.rate}.` }
-  }).catch(commandFailed)
+  const voices = await requestVoices($)
+  if (voices === null) {
+    return { text: 'The voice list is only available on Windows while the speech server is running. Try again in a moment.' }
+  }
+  if (first === '') return { text: await showScreen($, { kind: 'voice' }) }
 
-  on('command.run', { command: 'volume' }, async ($, e) => {
-    await loadSettings($)
-    const [choice] = word(e.args)
-    if (choice === '') return { text: await showScreen($, { kind: 'volume' }) }
-    if (!/^\d+$/.test(choice)) return { text: 'Use a number from 0 to 100.' }
-    await saveSettings($, { volume: clamp(Number(choice), 0, 100) })
+  const isTest = first === 'test'
+  const query = isTest ? rest : e.args.trim()
+  if (query === '') return { text: 'Say which voice to test, by number or name.' }
+  const matches = findVoice(voices, query)
+  if (matches.length === 0) return { text: `No voice matches "${query}". Type /voices to list them.` }
+  if (matches.length > 1) return { text: `More than one voice matches: ${matches.map(v => v.name).join(', ')}. Be more specific.` }
+  const voice = matches[0]!
+
+  if (isTest) {
+    await sendToServer($, { op: 'config', voice: voice.name })
+    await speak($, `This is ${voice.name}.`, { interrupt: true, isRaw: true })
     await sendVoiceConfig($)
-    await speak($, `Volume ${current.volume}.`, { interrupt: true, isRaw: true })
+    return { text: `Played a sample of ${voice.name}.` }
+  }
+  await saveSettings($, { voice: voice.name })
+  await sendVoiceConfig($)
+  await speak($, `Voice changed to ${voice.name}.`, { interrupt: true, isRaw: true })
 
-    return { text: `Speech volume set to ${current.volume}.` }
-  }).catch(commandFailed)
+  return { text: `Voice changed to ${voice.name}.` }
+}
 
-  on('command.run', { command: 'clean' }, async ($, e) => {
-    await loadSettings($)
-    const [choice] = word(e.args)
-    if (choice === '') return { text: await showScreen($, { kind: 'clean' }) }
-    if (!CLEAN_MODES.includes(choice as CleanMode)) return { text: 'Use on, off or words.' }
-    await saveSettings($, { clean: choice as CleanMode })
+async function rateCommand($: Engine, e: CommandRunInput): Promise<CommandAnswer> {
+  await loadSettings($)
+  const [choice] = word(e.args)
+  if (choice === '') return { text: await showScreen($, { kind: 'rate' }) }
+  let rate = current.rate
+  if (choice === 'faster') rate += 1
+  else if (choice === 'slower') rate -= 1
+  else if (/^-?\d+$/.test(choice)) rate = Number(choice)
+  else return { text: 'Use a number from -10 to 10, or faster, or slower.' }
+  await saveSettings($, { rate: clamp(rate, -10, 10) })
+  await sendVoiceConfig($)
+  await speak($, `Rate ${current.rate}.`, { interrupt: true, isRaw: true })
+
+  return { text: `Speech rate set to ${current.rate}.` }
+}
+
+async function volumeCommand($: Engine, e: CommandRunInput): Promise<CommandAnswer> {
+  await loadSettings($)
+  const [choice] = word(e.args)
+  if (choice === '') return { text: await showScreen($, { kind: 'volume' }) }
+  if (!/^\d+$/.test(choice)) return { text: 'Use a number from 0 to 100.' }
+  await saveSettings($, { volume: clamp(Number(choice), 0, 100) })
+  await sendVoiceConfig($)
+  await speak($, `Volume ${current.volume}.`, { interrupt: true, isRaw: true })
+
+  return { text: `Speech volume set to ${current.volume}.` }
+}
+
+async function cleanCommand($: Engine, e: CommandRunInput): Promise<CommandAnswer> {
+  await loadSettings($)
+  const [choice] = word(e.args)
+  if (choice === '') return { text: await showScreen($, { kind: 'clean' }) }
+  if (!CLEAN_MODES.includes(choice as CleanMode)) return { text: 'Use on, off or words.' }
+  await saveSettings($, { clean: choice as CleanMode })
+  $.ui.invalidate('ui.render')
+
+  return { text: `Symbol cleaning set to ${choice}.` }
+}
+
+async function soundsCommand($: Engine, e: CommandRunInput): Promise<CommandAnswer> {
+  await loadSettings($)
+  const parts = e.args.trim().split(/\s+/).filter(part => part !== '')
+  const [first = '', second = '', ...rest] = parts
+  const action = first.toLowerCase()
+  const eventWord = second.toLowerCase()
+
+  const saveEvent = async (event: SoundEvent, change: Partial<Settings['soundEvents'][SoundEvent]>) => {
+    await saveSettings($, { soundEvents: { ...current.soundEvents, [event]: { ...current.soundEvents[event], ...change } } })
+  }
+  const ambiguous = (files: readonly SoundFile[]) => `More than one sound matches: ${files.map(f => f.name).join(', ')}. Be more specific.`
+
+  if (action === '') return { text: await showScreen($, { kind: 'sounds' }) }
+  if (action === 'status') {
+    const counts = { done: 0, start: 0, attention: 0, error: 0 }
+    for (const event of SOUND_EVENTS) counts[event] = (await soundFiles($, event)).length
+    return { text: overviewText(current, counts) }
+  }
+  if (action === 'help') return { text: SOUNDS_HELP }
+  if (action === 'on' || action === 'off') {
+    await saveSettings($, { sounds: action === 'on' })
+    return { text: `All sounds turned ${action}.` }
+  }
+  if (action === 'test') {
+    const file = chooseSound(await soundFiles($, 'done'), current.soundEvents.done.pick, Math.random())
+    if (!file) return { text: 'There are no done sounds.' }
+    await playFile($, file)
+    return { text: `Played ${file.name}.` }
+  }
+  if (action === 'folder') {
+    const root = await customSoundRoot($)
+    return { text: root ? `Your own sounds are kept in ${root}, one folder per event. WAV files placed there are used right away.` : 'Could not find your local app data folder.' }
+  }
+
+  // "/sounds done on" turns one event on or off.
+  if (isSoundEvent(action) && (eventWord === 'on' || eventWord === 'off')) {
+    await saveEvent(action, { isOn: eventWord === 'on' })
+    return { text: `${action} sound turned ${eventWord}.` }
+  }
+
+  if (!isSoundEvent(eventWord)) {
+    return { text: `Name an event: done, start, attention or error. For example, /sounds ${action} done. Type /sounds help for all sound commands.` }
+  }
+  const event = eventWord
+  const files = await soundFiles($, event)
+  const query = rest.join(' ')
+
+  if (action === 'list') return { text: listText(event, files, current.soundEvents[event]) }
+
+  if (action === 'play') {
+    const chosen = query === '' ? chooseSound(files, current.soundEvents[event].pick, Math.random()) : undefined
+    const matches = query === '' ? (chosen ? [chosen] : []) : findSound(files, query)
+    if (matches.length === 0) return { text: files.length === 0 ? `No ${event} sounds yet.` : `No ${event} sound matches "${query}".` }
+    if (matches.length > 1) return { text: ambiguous(matches) }
+    await playFile($, matches[0]!)
+    return { text: `Played ${matches[0]!.name}.` }
+  }
+
+  if (action === 'pick') {
+    if (query === '' || query.toLowerCase() === 'random') {
+      await saveEvent(event, { pick: 'random' })
+      return { text: `${event} will play a random sound each time.` }
+    }
+    const matches = findSound(files, query)
+    if (matches.length === 0) return { text: `No ${event} sound matches "${query}". Type /sounds list ${event}.` }
+    if (matches.length > 1) return { text: ambiguous(matches) }
+    await saveEvent(event, { pick: matches[0]!.name })
+    await playFile($, matches[0]!)
+    return { text: `${event} will always play ${matches[0]!.name}.` }
+  }
+
+  if (action === 'add') {
+    const source = query.replace(/^"(.*)"$/, '$1')
+    if (source === '') return { text: `Give the path to a sound file, such as /sounds add ${event} C:\\sounds\\ding.wav.` }
+    const root = await customSoundRoot($)
+    if (root === null) return { text: 'Could not find your local app data folder.' }
+    const answer = await runSoundScript($, ['-Action', 'add', '-Source', source, '-Dest', `${root}\\${event}`])
+    if (!answer.startsWith('OK ')) return { text: `Could not add the sound: ${answer.replace(/^ERROR /, '') || 'unknown error'}.` }
+    const name = answer.slice(3)
+    await playFile($, { name, path: `${root}\\${event}\\${name}`, isCustom: true })
+    return { text: `Added ${name} to the ${event} sounds.` }
+  }
+
+  if (action === 'remove') {
+    const matches = findSound(files, query)
+    if (query === '' || matches.length === 0) return { text: `No ${event} sound matches "${query}". Type /sounds list ${event}.` }
+    if (matches.length > 1) return { text: ambiguous(matches) }
+    const file = matches[0]!
+    if (!file.isCustom) return { text: `${file.name} comes with Blind Claude and cannot be removed. Turn the event off, or pick another sound, instead.` }
+    const answer = await runSoundScript($, ['-Action', 'remove', '-Source', file.path])
+    if (!answer.startsWith('OK ')) return { text: `Could not remove the sound: ${answer.replace(/^ERROR /, '') || 'unknown error'}.` }
+    if (current.soundEvents[event].pick.toLowerCase() === file.name.toLowerCase()) await saveEvent(event, { pick: 'random' })
+    return { text: `Removed ${file.name}.` }
+  }
+
+  return { text: `Unknown sound command "${action}". Type /sounds help for the list.` }
+}
+
+async function changesCommand($: Engine, e: CommandRunInput): Promise<CommandAnswer> {
+  await loadSettings($)
+  const [first, rest] = word(e.args)
+  const [second] = word(rest)
+  const setChanges = async (change: Partial<Settings['changes']>, text: string) => {
+    await saveSettings($, { changes: { ...current.changes, ...change } })
+    return { text }
+  }
+  const onOff = async (key: 'isAuto' | 'isPreview', what: string) => {
+    if (second !== 'on' && second !== 'off') return { text: `Use /changes ${first} on or /changes ${first} off.` }
+    return setChanges({ [key]: second === 'on' }, `${what} turned ${second}.`)
+  }
+
+  if (first === 'help') return { text: CHANGES_HELP }
+  if (first === 'settings') return { text: await showScreen($, { kind: 'changes' }) }
+  if (first === 'auto') return onOff('isAuto', 'Opening the report after each turn that changes files')
+  if (first === 'before' || (first === 'preview' && second !== '')) return onOff('isPreview', 'Opening the change before you approve an edit')
+  if (first === 'editor') {
+    const editor = rest.replace(/^"(.*)"$/, '$1').trim()
+    if (editor === '') return { text: `The editor is ${editorName(current.changes.editor)}. Use /changes editor and auto, notepad++, notepad or the path of a program.` }
+    const named = ['auto', 'notepad++', 'notepad'].includes(editor.toLowerCase()) ? editor.toLowerCase() : editor
+    return setChanges({ editor: named }, `Change reports will open in ${editorName(named)}.`)
+  }
+  if (first === 'view') {
+    if (second !== 'text' && second !== 'browser') return { text: 'Use /changes view text or /changes view browser.' }
+    return setChanges({ view: second }, second === 'browser' ? 'Change reports will open as a web page.' : 'Change reports will open as text.')
+  }
+  if (first === 'context') {
+    if (!/^\d+$/.test(second)) return { text: 'Use /changes context and a number from 0 to 5.' }
+    const context = clamp(Number(second), 0, 5)
+    return setChanges({ context }, `${context} unchanged lines will be shown around each change.`)
+  }
+  if (first === 'rows') {
+    if (second !== 'full' && second !== 'summary') return { text: 'Use /changes rows full or /changes rows summary.' }
+    await saveSettings($, { changes: { ...current.changes, isSummaryOnly: second === 'summary' } })
     $.ui.invalidate('ui.render')
+    return { text: second === 'summary' ? 'Edits in the transcript show a summary only.' : 'Edits in the transcript show a summary and the changed lines.' }
+  }
+  if (first === 'preview') {
+    if (lastPreview === null) return { text: 'No edit is waiting for your permission.' }
+    return { text: await openReport($, [lastPreview], 'Blind Claude: the change Claude wants to make. It has not been made yet.') }
+  }
+  if (first === 'git') return { text: await gitReport($) }
+  if (first === 'session') {
+    const changes = await sessionChanges($)
+    if (changes.length === 0) return { text: 'Claude has not changed any files in this session yet.' }
+    return { text: await openReport($, changes, 'Blind Claude change report for this whole session.') }
+  }
 
-    return { text: `Symbol cleaning set to ${choice}.` }
-  }).catch(commandFailed)
+  const changes = await lastTurnChanges($)
+  // Edits made through shell commands are not recorded, so git is asked.
+  if (changes.length === 0) return { text: `Claude has not changed any files with its editing tools in this session, so this is what git shows. ${await gitReport($)}` }
+  const files = filesOf(changes)
+  const pickFile = (text: string) => {
+    const n = Number(text)
+    return /^\d+$/.test(text) && n >= 1 && n <= files.length ? files[n - 1]! : null
+  }
+  const noFile = (text: string) => ({ text: `There is no file ${text}. The last turn changed ${files.length === 1 ? '1 file' : `${files.length} files`}: ${files.map((f, i) => `${i + 1}, ${relativePath(f.path, cwd)}`).join('. ')}.` })
 
-  on('command.run', { command: 'sounds' }, async ($, e) => {
-    await loadSettings($)
-    const parts = e.args.trim().split(/\s+/).filter(part => part !== '')
-    const [first = '', second = '', ...rest] = parts
-    const action = first.toLowerCase()
-    const eventWord = second.toLowerCase()
+  if (first === 'open') {
+    const file = pickFile(second)
+    if (file === null) return noFile(second)
+    const line = firstChangedLine(file)
+    const opened = await openInEditor($, file.path, { editor: current.changes.editor, line })
+    if ('error' in opened) return { text: `Could not open ${relativePath(file.path, cwd)}: ${opened.error}.` }
+    const goTo = opened.editor === 'Notepad++' ? `at line ${line}` : `. Press Control G and type ${line} to go to the first change`
+    return { text: `Opened ${relativePath(file.path, cwd)} in ${opened.editor} ${goTo}.`.replace(' .', '.') }
+  }
+  if (first !== '') {
+    const file = pickFile(first)
+    if (file === null) return /^\d+$/.test(first) ? noFile(first) : { text: `Unknown option "${first}". Type /changes help for the list.` }
+    const forFile = changes.filter(c => c.path.toLowerCase() === file.path.toLowerCase())
+    return { text: await openReport($, forFile, `Blind Claude change report for ${relativePath(file.path, cwd)}, from the last turn that changed files.`) }
+  }
 
-    const saveEvent = async (event: SoundEvent, change: Partial<Settings['soundEvents'][SoundEvent]>) => {
-      await saveSettings($, { soundEvents: { ...current.soundEvents, [event]: { ...current.soundEvents[event], ...change } } })
-    }
-    const ambiguous = (files: readonly SoundFile[]) => `More than one sound matches: ${files.map(f => f.name).join(', ')}. Be more specific.`
+  return { text: await openReport($, changes, 'Blind Claude change report for the last turn that changed files.') }
+}
 
-    if (action === '') return { text: await showScreen($, { kind: 'sounds' }) }
-    if (action === 'status') {
-      const counts = { done: 0, start: 0, attention: 0, error: 0 }
-      for (const event of SOUND_EVENTS) counts[event] = (await soundFiles($, event)).length
-      return { text: overviewText(current, counts) }
-    }
-    if (action === 'help') return { text: SOUNDS_HELP }
-    if (action === 'on' || action === 'off') {
-      await saveSettings($, { sounds: action === 'on' })
-      return { text: `All sounds turned ${action}.` }
-    }
-    if (action === 'test') {
-      const file = chooseSound(await soundFiles($, 'done'), current.soundEvents.done.pick, Math.random())
-      if (!file) return { text: 'There are no done sounds.' }
-      await playFile($, file)
-      return { text: `Played ${file.name}.` }
-    }
-    if (action === 'folder') {
-      const root = await customSoundRoot($)
-      return { text: root ? `Your own sounds are kept in ${root}, one folder per event. WAV files placed there are used right away.` : 'Could not find your local app data folder.' }
-    }
+async function blindCommand($: Engine, e: CommandRunInput): Promise<CommandAnswer> {
+  await loadSettings($)
+  const [choice] = word(e.args)
+  if (choice === 'help') return { text: HELP }
+  if (choice === 'reset') {
+    await resetSettings($)
+    return { text: RESET_MESSAGE }
+  }
+  if (choice === 'prompts') {
+    const [state] = word(e.args.trim().slice('prompts'.length))
+    if (state === '') return { text: await showScreen($, { kind: 'prompts' }) }
+    if (state !== 'on' && state !== 'off') return { text: 'Use /blind prompts on or /blind prompts off.' }
+    await saveSettings($, { prompts: state === 'on' })
+    return { text: state === 'on' ? "Permission prompts and Claude's questions now use Blind Claude's dialog." : "Permission prompts and Claude's questions now use Claude Code's own." }
+  }
+  if (choice === 'restart') {
+    const old = bridge
+    serverStarts = []
+    bridge = null
+    if (old?.state === 'ready') await writeCommand($, old, { op: 'quit' })
+    else old?.queue.push({ op: 'quit' })
+    const server = await ensureServer($)
+    if (server === null) return { text: 'The speech server only runs on Windows.' }
+    const isReady = await Promise.race([server.ready, $.clock.sleep(8000).then(() => false)])
+    if (!isReady) return { text: 'The speech server is still starting, or could not start. Type /blind status to check.' }
+    await speak($, 'Speech restarted.', { interrupt: true, isRaw: true })
+    return { text: 'Speech server restarted.' }
+  }
+  if (choice === 'status') {
+    await refreshEngine($)
+    const summary = `${describeSettings(current)}\nSpeech engine: ${engineName()}.\nType /blind help for all commands.`
+    await speak($, summary, { interrupt: true, isRaw: true })
+    return { text: summary }
+  }
 
-    // "/sounds done on" turns one event on or off.
-    if (isSoundEvent(action) && (eventWord === 'on' || eventWord === 'off')) {
-      await saveEvent(action, { isOn: eventWord === 'on' })
-      return { text: `${action} sound turned ${eventWord}.` }
-    }
-
-    if (!isSoundEvent(eventWord)) {
-      return { text: `Name an event: done, start, attention or error. For example, /sounds ${action} done. Type /sounds help for all sound commands.` }
-    }
-    const event = eventWord
-    const files = await soundFiles($, event)
-    const query = rest.join(' ')
-
-    if (action === 'list') return { text: listText(event, files, current.soundEvents[event]) }
-
-    if (action === 'play') {
-      const chosen = query === '' ? chooseSound(files, current.soundEvents[event].pick, Math.random()) : undefined
-      const matches = query === '' ? (chosen ? [chosen] : []) : findSound(files, query)
-      if (matches.length === 0) return { text: files.length === 0 ? `No ${event} sounds yet.` : `No ${event} sound matches "${query}".` }
-      if (matches.length > 1) return { text: ambiguous(matches) }
-      await playFile($, matches[0]!)
-      return { text: `Played ${matches[0]!.name}.` }
-    }
-
-    if (action === 'pick') {
-      if (query === '' || query.toLowerCase() === 'random') {
-        await saveEvent(event, { pick: 'random' })
-        return { text: `${event} will play a random sound each time.` }
-      }
-      const matches = findSound(files, query)
-      if (matches.length === 0) return { text: `No ${event} sound matches "${query}". Type /sounds list ${event}.` }
-      if (matches.length > 1) return { text: ambiguous(matches) }
-      await saveEvent(event, { pick: matches[0]!.name })
-      await playFile($, matches[0]!)
-      return { text: `${event} will always play ${matches[0]!.name}.` }
-    }
-
-    if (action === 'add') {
-      const source = query.replace(/^"(.*)"$/, '$1')
-      if (source === '') return { text: `Give the path to a sound file, such as /sounds add ${event} C:\\sounds\\ding.wav.` }
-      const root = await customSoundRoot($)
-      if (root === null) return { text: 'Could not find your local app data folder.' }
-      const answer = await runSoundScript($, ['-Action', 'add', '-Source', source, '-Dest', `${root}\\${event}`])
-      if (!answer.startsWith('OK ')) return { text: `Could not add the sound: ${answer.replace(/^ERROR /, '') || 'unknown error'}.` }
-      const name = answer.slice(3)
-      await playFile($, { name, path: `${root}\\${event}\\${name}`, isCustom: true })
-      return { text: `Added ${name} to the ${event} sounds.` }
-    }
-
-    if (action === 'remove') {
-      const matches = findSound(files, query)
-      if (query === '' || matches.length === 0) return { text: `No ${event} sound matches "${query}". Type /sounds list ${event}.` }
-      if (matches.length > 1) return { text: ambiguous(matches) }
-      const file = matches[0]!
-      if (!file.isCustom) return { text: `${file.name} comes with Blind Claude and cannot be removed. Turn the event off, or pick another sound, instead.` }
-      const answer = await runSoundScript($, ['-Action', 'remove', '-Source', file.path])
-      if (!answer.startsWith('OK ')) return { text: `Could not remove the sound: ${answer.replace(/^ERROR /, '') || 'unknown error'}.` }
-      if (current.soundEvents[event].pick.toLowerCase() === file.name.toLowerCase()) await saveEvent(event, { pick: 'random' })
-      return { text: `Removed ${file.name}.` }
-    }
-
-    return { text: `Unknown sound command "${action}". Type /sounds help for the list.` }
-  }).catch(commandFailed)
-
-  on('command.run', { command: 'changes' }, async ($, e) => {
-    await loadSettings($)
-    const [first, rest] = word(e.args)
-    const [second] = word(rest)
-    const setChanges = async (change: Partial<Settings['changes']>, text: string) => {
-      await saveSettings($, { changes: { ...current.changes, ...change } })
-      return { text }
-    }
-    const onOff = async (key: 'isAuto' | 'isPreview', what: string) => {
-      if (second !== 'on' && second !== 'off') return { text: `Use /changes ${first} on or /changes ${first} off.` }
-      return setChanges({ [key]: second === 'on' }, `${what} turned ${second}.`)
-    }
-
-    if (first === 'help') return { text: CHANGES_HELP }
-    if (first === 'settings') return { text: await showScreen($, { kind: 'changes' }) }
-    if (first === 'auto') return onOff('isAuto', 'Opening the report after each turn that changes files')
-    if (first === 'before' || (first === 'preview' && second !== '')) return onOff('isPreview', 'Opening the change before you approve an edit')
-    if (first === 'editor') {
-      const editor = rest.replace(/^"(.*)"$/, '$1').trim()
-      if (editor === '') return { text: `The editor is ${editorName(current.changes.editor)}. Use /changes editor and auto, notepad++, notepad or the path of a program.` }
-      const named = ['auto', 'notepad++', 'notepad'].includes(editor.toLowerCase()) ? editor.toLowerCase() : editor
-      return setChanges({ editor: named }, `Change reports will open in ${editorName(named)}.`)
-    }
-    if (first === 'view') {
-      if (second !== 'text' && second !== 'browser') return { text: 'Use /changes view text or /changes view browser.' }
-      return setChanges({ view: second }, second === 'browser' ? 'Change reports will open as a web page.' : 'Change reports will open as text.')
-    }
-    if (first === 'context') {
-      if (!/^\d+$/.test(second)) return { text: 'Use /changes context and a number from 0 to 5.' }
-      const context = clamp(Number(second), 0, 5)
-      return setChanges({ context }, `${context} unchanged lines will be shown around each change.`)
-    }
-    if (first === 'rows') {
-      if (second !== 'full' && second !== 'summary') return { text: 'Use /changes rows full or /changes rows summary.' }
-      await saveSettings($, { changes: { ...current.changes, isSummaryOnly: second === 'summary' } })
-      $.ui.invalidate('ui.render')
-      return { text: second === 'summary' ? 'Edits in the transcript show a summary only.' : 'Edits in the transcript show a summary and the changed lines.' }
-    }
-    if (first === 'preview') {
-      if (lastPreview === null) return { text: 'No edit is waiting for your permission.' }
-      return { text: await openReport($, [lastPreview], 'Blind Claude: the change Claude wants to make. It has not been made yet.') }
-    }
-    if (first === 'git') return { text: await gitReport($) }
-    if (first === 'session') {
-      const changes = await sessionChanges($)
-      if (changes.length === 0) return { text: 'Claude has not changed any files in this session yet.' }
-      return { text: await openReport($, changes, 'Blind Claude change report for this whole session.') }
-    }
-
-    const changes = await lastTurnChanges($)
-    // Edits made through shell commands are not recorded, so git is asked.
-    if (changes.length === 0) return { text: `Claude has not changed any files with its editing tools in this session, so this is what git shows. ${await gitReport($)}` }
-    const files = filesOf(changes)
-    const pickFile = (text: string) => {
-      const n = Number(text)
-      return /^\d+$/.test(text) && n >= 1 && n <= files.length ? files[n - 1]! : null
-    }
-    const noFile = (text: string) => ({ text: `There is no file ${text}. The last turn changed ${files.length === 1 ? '1 file' : `${files.length} files`}: ${files.map((f, i) => `${i + 1}, ${relativePath(f.path, cwd)}`).join('. ')}.` })
-
-    if (first === 'open') {
-      const file = pickFile(second)
-      if (file === null) return noFile(second)
-      const line = firstChangedLine(file)
-      const opened = await openInEditor($, file.path, { editor: current.changes.editor, line })
-      if ('error' in opened) return { text: `Could not open ${relativePath(file.path, cwd)}: ${opened.error}.` }
-      const goTo = opened.editor === 'Notepad++' ? `at line ${line}` : `. Press Control G and type ${line} to go to the first change`
-      return { text: `Opened ${relativePath(file.path, cwd)} in ${opened.editor} ${goTo}.`.replace(' .', '.') }
-    }
-    if (first !== '') {
-      const file = pickFile(first)
-      if (file === null) return /^\d+$/.test(first) ? noFile(first) : { text: `Unknown option "${first}". Type /changes help for the list.` }
-      const forFile = changes.filter(c => c.path.toLowerCase() === file.path.toLowerCase())
-      return { text: await openReport($, forFile, `Blind Claude change report for ${relativePath(file.path, cwd)}, from the last turn that changed files.`) }
-    }
-
-    return { text: await openReport($, changes, 'Blind Claude change report for the last turn that changed files.') }
-  }).catch(commandFailed)
-
-  on('command.run', { command: 'blind' }, async ($, e) => {
-    await loadSettings($)
-    const [choice] = word(e.args)
-    if (choice === 'help') return { text: HELP }
-    if (choice === 'reset') {
-      await resetSettings($)
-      return { text: RESET_MESSAGE }
-    }
-    if (choice === 'prompts') {
-      const [state] = word(e.args.trim().slice('prompts'.length))
-      if (state === '') return { text: await showScreen($, { kind: 'prompts' }) }
-      if (state !== 'on' && state !== 'off') return { text: 'Use /blind prompts on or /blind prompts off.' }
-      await saveSettings($, { prompts: state === 'on' })
-      return { text: state === 'on' ? "Permission prompts and Claude's questions now use Blind Claude's dialog." : "Permission prompts and Claude's questions now use Claude Code's own." }
-    }
-    if (choice === 'restart') {
-      const old = bridge
-      serverStarts = []
-      bridge = null
-      if (old?.state === 'ready') await writeCommand($, old, { op: 'quit' })
-      else old?.queue.push({ op: 'quit' })
-      const server = await ensureServer($)
-      if (server === null) return { text: 'The speech server only runs on Windows.' }
-      const isReady = await Promise.race([server.ready, $.clock.sleep(8000).then(() => false)])
-      if (!isReady) return { text: 'The speech server is still starting, or could not start. Type /blind status to check.' }
-      await speak($, 'Speech restarted.', { interrupt: true, isRaw: true })
-      return { text: 'Speech server restarted.' }
-    }
-    if (choice === 'status') {
-      await refreshEngine($)
-      const summary = `${describeSettings(current)}\nSpeech engine: ${engineName()}.\nType /blind help for all commands.`
-      await speak($, summary, { interrupt: true, isRaw: true })
-      return { text: summary }
-    }
-
-    return { text: await showScreen($, { kind: 'main' }) }
-  }).catch(commandFailed)
+  return { text: await showScreen($, { kind: 'main' }) }
 }

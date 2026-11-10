@@ -41,6 +41,10 @@ Menus are spoken unless the speech level is none.
 
 The commands below still work with words after them, for when you already know what you want.
 
+### While Claude is working
+
+Every Blind Claude command, and `/usage` and `/context`, works while Claude is in the middle of a turn. The answer is then written into the transcript as notice lines, which Claude never reads, so Claude is not interrupted by it and does not reply to it. Typing a slash command also leaves any speech playing, where a new message stops it.
+
 ### Overview
 
 1. `/blind`: open the settings menu.

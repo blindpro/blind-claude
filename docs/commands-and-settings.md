@@ -89,6 +89,14 @@ With `/clean off`, both show Claude Code's own panels again.
 3. `/changes auto`, `/changes before`, `/changes editor`, `/changes view`, `/changes context` and `/changes rows`: how reports open and what they show.
 4. `/changes help` lists them all. The accessible diffs document explains each one.
 
+### Copying a reply
+
+1. `/copyreply`: copy Claude's last reply to the clipboard, with symbols cleaned the way the screen shows it. Blind Claude says how many words were copied.
+2. `/copyreply raw`: copy the reply exactly as Claude wrote it, markdown and all.
+3. Typed while Claude is working, it copies the reply before the current one.
+
+Claude Code's own `/copy` still works as before.
+
 ### Permission prompts and questions
 
 1. `/blind prompts on`: permission prompts and Claude's questions in Blind Claude's dialog, with the question first and one choice per line. Default.

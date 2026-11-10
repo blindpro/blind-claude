@@ -86,7 +86,8 @@ These work now, apart from the ones marked as planned in the commands document.
 9. `/clean on`, `/clean off` or `/clean words`: symbol cleaning.
 10. `/sounds`: sound cues. `/sounds help` lists the sound commands.
 11. `/changes`: read what Claude changed in Notepad++ or Notepad. `/changes help` lists the rest.
-12. `/blind`: open the settings menu. Type a number and press Enter to pick a setting, then a number for its choice. 0 goes back. `/blind status` reads every setting in one list, `/blind help` lists every command, and `/blind restart` starts speech again if it has stopped.
+12. `/copyreply`: copy Claude's last reply to the clipboard. `/copyreply raw` copies it exactly as written.
+13. `/blind`: open the settings menu. Type a number and press Enter to pick a setting, then a number for its choice. 0 goes back. `/blind status` reads every setting in one list, `/blind help` lists every command, and `/blind restart` starts speech again if it has stopped.
 
 ## Platform
 

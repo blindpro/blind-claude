@@ -61,6 +61,7 @@ import {
 } from './speech'
 import type { Voice } from './speech'
 import { contextText, usageText } from './usage'
+import { copyText, lastReplyOf, wordCount } from './reply'
 
 type Engine = EngineInterface
 
@@ -93,6 +94,7 @@ const HELP = [
   '/blind restart: start the speech server again if speech has stopped.',
   '/usage and /context are answered in plain sentences while symbol cleaning is on.',
   '/changes: open what Claude changed in the last turn in Notepad++ or Notepad. /changes help for more.',
+  "/copyreply: copy Claude's last reply to the clipboard, symbols cleaned. /copyreply raw: exactly as Claude wrote it.",
   "/blind prompts on or off: permission prompts and Claude's questions in Blind Claude's dialog, or Claude Code's own.",
 ].join('\n')
 
@@ -759,6 +761,7 @@ export const register: Register = on => {
       { name: 'sounds', description: 'Blind Claude: list, play, pick, add and remove sound cues', argumentHint: '[help|status|on|off|list|play|pick|add|remove|folder]' },
       { name: 'blind', description: 'Blind Claude: open the settings menu, show status or help, reset, or restart speech', argumentHint: '[help|status|reset|restart|prompts on|prompts off]' },
       { name: 'changes', description: 'Blind Claude: read what Claude changed, in Notepad++ or Notepad', argumentHint: '[help|session|<number>|open <number>|git|preview|auto|before|editor|view|context|rows]' },
+      { name: 'copyreply', description: "Blind Claude: copy Claude's last reply to the clipboard", argumentHint: '[raw]' },
     ]
     // Claude Code refuses a name one of its own commands uses, and some exist
     // only in interactive sessions. One refusal must not stop the others.
@@ -1077,6 +1080,35 @@ export const register: Register = on => {
   on('command.run', { command: 'sounds' }, async ($, e) => deliver($, await soundsCommand($, e))).catch($ => failed($))
   on('command.run', { command: 'changes' }, async ($, e) => deliver($, await changesCommand($, e))).catch($ => failed($))
   on('command.run', { command: 'blind' }, async ($, e) => deliver($, await blindCommand($, e))).catch($ => failed($))
+  on('command.run', { command: 'copyreply' }, async ($, e) => deliver($, await copyReplyCommand($, e))).catch($ => failed($))
+}
+
+// Claude's last reply, from the transcript so it is found after a reload of
+// the mod too, else the last one this module saw end a turn.
+async function findLastReply($: Engine): Promise<string> {
+  try {
+    const found = lastReplyOf(await $.session.messages())
+    if (found !== '') return found
+  } catch (error) {
+    $.ui.log(`Blind Claude could not read the transcript: ${String(error)}`, { to: 'debug' })
+  }
+
+  return lastReply.trim()
+}
+
+async function copyReplyCommand($: Engine, e: CommandRunInput): Promise<CommandAnswer> {
+  await loadSettings($)
+  const [choice] = word(e.args)
+  if (choice !== '' && choice !== 'raw') return { text: 'Use /copyreply, or /copyreply raw to copy the reply exactly as Claude wrote it.' }
+  const reply = await findLastReply($)
+  if (reply === '') return { text: 'Claude has not replied yet, so there is nothing to copy.' }
+  const text = copyText(reply, current.clean, choice === 'raw')
+  const copied = await $.ui.copy({ text })
+  if (!copied.isCopied) return { text: `Could not copy the reply: ${copied.reason === 'no-clipboard' ? 'no clipboard could be reached' : copied.reason}.` }
+  const message = `Copied Claude's last reply, ${wordCount(text)}.`
+  if (current.level !== 'none') await speak($, message, { interrupt: true, isRaw: true })
+
+  return { text: message }
 }
 
 // The Blind Claude commands, each answering what the person typed.

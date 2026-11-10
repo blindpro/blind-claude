@@ -1,6 +1,13 @@
 import { expect, test } from 'claude-code/testing'
 
-import { QUESTION_KEY, allowKey, answerOf, describeCall, dialogSpeech, focusOrder, parseQuestions, permissionDialog, questionDialog, questionSpeech, wrapFocus } from './prompts'
+import { QUESTION_KEY, allowKey, answerOf, describeCall, dialogSpeech, focusOrder, parseQuestions, permissionDialog, questionDialog, questionNotice, questionSpeech, wrapFocus } from './prompts'
+
+test('the notice for a question says the question and its choices', () => {
+  const questions = parseQuestions({ questions: [{ question: 'Which database?', header: 'DB', options: [{ label: 'SQLite' }, { label: 'Postgres' }] }] })!
+  expect(questionNotice(questions)).toBe('Claude has a question. Which database? Choices: 1, SQLite. 2, Postgres.')
+  const two = parseQuestions({ questions: [...Array(2)].map(() => ({ question: 'Pick?', options: [{ label: 'A' }] })) })!
+  expect(questionNotice(two)).toBe('Question 1 of 2. Pick? Choices: 1, A. Question 2 of 2. Pick? Choices: 1, A.')
+})
 
 test('a command permission says what will run, line by line, then asks', () => {
   const dialog = permissionDialog('p1', 'Bash', { command: 'git add .\ngit push', description: 'Push the branch' }, undefined, undefined)

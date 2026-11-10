@@ -51,6 +51,8 @@ Typing in the box answers with your own words. When Claude asks several question
 3. For approving a plan in plan mode, which Claude Code must answer itself.
 4. When Claude Code would not ask at all, for example because of your permission settings or mode. Blind Claude only takes over a question Claude Code was going to put to you.
 
+Whenever Claude Code stops for one of Claude's questions, its notification, which only says Claude needs your permission, is not spoken. Blind Claude speaks the question and its numbered choices instead.
+
 ## How it works
 
 1. Claude Code decides whether a tool call needs your permission. Blind Claude hooks `tool.check`, and when the answer is "ask", and you are the one to be asked, it shows its dialog and gives your answer back as allow or deny.

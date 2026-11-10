@@ -186,6 +186,19 @@ export function dialogSpeech(dialog: Dialog): string {
   return `${dialog.title} ${dialog.lines.join(' ')} ${dialog.options.length} choices: ${choices} Use up and down arrow and Enter, or press a number. Up arrow from the first choice reads the question again.`
 }
 
+// What is spoken in place of Claude Code's notification when it stops for
+// a question: each question and its choices, so it can be heard without
+// finding the dialog first.
+export function questionNotice(questions: readonly Question[]): string {
+  return questions
+    .map((q, index) => {
+      const head = questions.length > 1 ? `Question ${index + 1} of ${questions.length}.` : 'Claude has a question.'
+      const choices = q.options.map((o, i) => `${i + 1}, ${o.label}.`).join(' ')
+      return `${head} ${q.question} Choices: ${choices}`
+    })
+    .join(' ')
+}
+
 // The answer to one question, as AskUserQuestion's result keeps it.
 export function answerOf(question: Question, chosen: readonly number[]): string {
   return chosen.map(i => question.options[i]?.label ?? '').filter(l => l !== '').join(', ')

@@ -23,7 +23,7 @@ import {
   summary,
 } from './diff'
 import type { ReportOptions } from './diff'
-import { ENGINE_ONLY_TOOLS, QUESTION_KEY, allowKey, answerOf, dialogSpeech, focusOrder, parseQuestions, permissionDialog, questionDialog, questionSpeech, wrapFocus } from './prompts'
+import { ENGINE_ONLY_TOOLS, QUESTION_KEY, allowKey, answerOf, dialogSpeech, focusOrder, parseQuestions, permissionDialog, questionDialog, questionNotice, questionSpeech, wrapFocus } from './prompts'
 import type { Question } from './prompts'
 import { RESET_MESSAGE, choose, parseChoice, screenText } from './menu'
 import type { MenuContext, Screen } from './menu'
@@ -164,6 +164,9 @@ const allowedThisSession = new Set<string>()
 // The file the open dialog's answer is written into, and whether its pane is open.
 let answerPath: string | null = null
 let isDialogOpen = false
+// The question Claude is waiting on, spoken in place of Claude Code's
+// notification when it stops for it. Null when no question is waiting.
+let waitingQuestion: string | null = null
 // The stop the dialog's focus is on, and whether the pane has a text box,
 // so the focus can wrap past Claude Code's own stops (see wrapFocus).
 let dialogFocus: string | null = null
@@ -859,6 +862,9 @@ export const register: Register = on => {
   // "Show Claude Code's own question instead" lets it open.
   on('tool.call', { tool: 'AskUserQuestion' }, async ($, e, next) => {
     await loadSettings($)
+    // The question is answered or shown from here, so a later notification
+    // is not about it.
+    waitingQuestion = null
     if (!current.prompts) return next(e)
     const questions = parseQuestions(e)
     const shown = parseQuestions(cleanInput(e))
@@ -904,6 +910,8 @@ export const register: Register = on => {
     const verdict = await next(e)
     await loadSettings($)
     const id = e.tool_use_id
+    const questions = e.tool === 'AskUserQuestion' ? parseQuestions(cleanInput(e.input)) : null
+    waitingQuestion = questions ? questionNotice(questions) : null
     if (verdict.decision !== 'ask' || e.approver !== 'person' || id === undefined || ENGINE_ONLY_TOOLS.has(e.tool)) return verdict
     if (allowedThisSession.has(allowKey(e.tool, e.input))) return { decision: 'allow', reason: 'Allowed for the rest of this session in Blind Claude.' }
     const preview = previews.get(id)
@@ -1001,7 +1009,9 @@ export const register: Register = on => {
     await loadSettings($)
     if (!/idle/i.test(e.notification_type)) {
       await playSound($, 'attention')
-      if (speaksAlerts(current.level)) await speak($, e.message, { interrupt: false })
+      // Claude Code's message only says it wants permission; the question
+      // itself is what needs hearing.
+      if (speaksAlerts(current.level)) await speak($, waitingQuestion ?? e.message, { interrupt: false, isRaw: waitingQuestion !== null })
     }
 
     return next(e)

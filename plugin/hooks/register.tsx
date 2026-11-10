@@ -62,6 +62,8 @@ import {
 import type { Voice } from './speech'
 import { contextText, usageText } from './usage'
 import { copyText, lastReplyOf, wordCount } from './reply'
+import { isEnvOn, windowTitle } from './title'
+import type { TitleState } from './title'
 
 type Engine = EngineInterface
 
@@ -177,6 +179,23 @@ let dialogHasInput = false
 let dialogQueue: Promise<unknown> = Promise.resolve()
 // Whether Claude is working on a turn of the main conversation now.
 let isTurnRunning = false
+// Whether Blind Claude sets the window title (see title.ts), and the title
+// it last set, so the same title is not sent again.
+let canSetTitle = false
+let titleShown: string | null = null
+
+async function showTitle($: Engine, state: TitleState): Promise<void> {
+  if (!canSetTitle) return
+  const text = windowTitle(state, cwd)
+  if (text === titleShown) return
+  titleShown = text
+  await sendToServer($, { op: 'title', text })
+}
+
+// The title once a wait for the person is over.
+function stateAfterWait(): TitleState {
+  return isTurnRunning ? 'working' : 'idle'
+}
 
 async function loadSettings($: Engine): Promise<void> {
   if (hasSettings) return
@@ -587,6 +606,7 @@ async function closeDialog($: Engine): Promise<void> {
   answerPath = null
   if (!isDialogOpen) return
   isDialogOpen = false
+  await showTitle($, stateAfterWait())
   await update($, dialogState, () => null)
   await $.ui.close({ id: DIALOG_PANE })
 }
@@ -612,6 +632,7 @@ async function askDialog($: Engine, dialog: Dialog, signal: AbortSignal, isNew: 
   }
   if (isNew) {
     dialogFocus = QUESTION_KEY
+    await showTitle($, 'waiting')
     await playSound($, 'attention')
     if (current.level !== 'none') await speak($, dialogSpeech(dialog), { interrupt: true, isRaw: true })
   }
@@ -775,6 +796,9 @@ export const register: Register = on => {
 
     // Started now so the first reply is not kept waiting for it.
     await ensureServer($)
+    canSetTitle = isWindows === true && isEnvOn(await $.env.get('CLAUDE_CODE_DISABLE_TERMINAL_TITLE'))
+    titleShown = null
+    await showTitle($, 'idle')
 
     return started
   })
@@ -903,6 +927,9 @@ export const register: Register = on => {
   on('tool.call', async ($, e, next) => {
     await loadSettings($)
     const isMain = e.agentId === undefined
+    // A tool runs once any permission it needed was given, so Claude is
+    // working again.
+    if (isMain && isTurnRunning && !isDialogOpen) await showTitle($, 'working')
     const isFileTool = e.tool === 'Edit' || e.tool === 'Write'
     if (isFileTool) {
       const preview = await preparePreview($, e.tool, e, e.tool_use_id)
@@ -1024,6 +1051,7 @@ export const register: Register = on => {
     const started = await next(e)
     if (e.agentId === undefined) {
       isTurnRunning = true
+      await showTitle($, 'working')
       await update($, turnState, n => (n ?? 0) + 1)
     }
     await playSound($, 'start')
@@ -1035,6 +1063,7 @@ export const register: Register = on => {
   on('classic.Notification', async ($, e, next) => {
     await loadSettings($)
     if (!/idle/i.test(e.notification_type)) {
+      await showTitle($, 'waiting')
       await playSound($, 'attention')
       // Claude Code's message only says it wants permission; the question
       // itself is what needs hearing.
@@ -1049,6 +1078,7 @@ export const register: Register = on => {
     const result = await next(e)
     if (e.agentId !== undefined) return result
     isTurnRunning = false
+    await showTitle($, 'idle')
 
     if (e.reason === 'answer') {
       if (e.answer.trim() !== '') lastReply = e.answer
@@ -1425,7 +1455,8 @@ async function blindCommand($: Engine, e: CommandRunInput): Promise<CommandAnswe
   }
   if (choice === 'status') {
     await refreshEngine($)
-    const summary = `${describeSettings(current)}\nSpeech engine: ${engineName()}.\nType /blind help for all commands.`
+    const title = canSetTitle ? 'set by Blind Claude' : "Claude Code's own. Run the Blind Claude installer again to let Blind Claude set it"
+    const summary = `${describeSettings(current)}\nSpeech engine: ${engineName()}.\nWindow title: ${title}.\nType /blind help for all commands.`
     await speak($, summary, { interrupt: true, isRaw: true })
     return { text: summary }
   }

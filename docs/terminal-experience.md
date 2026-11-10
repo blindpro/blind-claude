@@ -18,6 +18,16 @@ This document covers the changes Blind Claude makes to how Claude Code looks and
 2. Every 30 seconds, the line updates once to say how long Claude has been working, such as "Working, 1 minute." The interval can be changed or turned off.
 3. When the turn ends, the line says "Done, took 45 seconds."
 
+### A steady window title
+
+Claude Code's own window title starts with a symbol that flips every second while Claude works, which a screen reader can pick up as a title change each time. Blind Claude sets the title instead, on Windows:
+
+1. While Claude works: "Working, Claude Code," then the project folder's name.
+2. While Claude waits for a permission or an answer: "Waiting for you, Claude Code," then the folder.
+3. Otherwise: "Claude Code," then the folder.
+
+The title changes only when one of these does. To make room for it, the installer turns on Claude Code's `CLAUDE_CODE_DISABLE_TERMINAL_TITLE` setting, in the env part of your Claude Code user settings, and keeps a copy of the file as it was beside it. Without that setting Blind Claude leaves the title to Claude Code, and `/blind status` says so. The uninstaller gives the title back to Claude Code. When Claude Code closes, the title it had before is put back.
+
 ### Plain tool rows
 
 Each tool call is drawn as one sentence, starting with a word rather than a symbol:

@@ -82,6 +82,24 @@ if ($RemoveSettings -and (Test-Path -LiteralPath $storeFolder)) {
     Get-ChildItem -LiteralPath $storeFolder -Filter "$Plugin`_*.json" | Remove-Item -Force
     Write-Host 'Removed your saved settings.'
 }
+# The installer turned off Claude Code's own window title so Blind Claude
+# could set it. Give the title back to Claude Code.
+$settingsPath = Join-Path $HOME '.claude\settings.json'
+try {
+    if (Test-Path -LiteralPath $settingsPath) {
+        $settings = [System.IO.File]::ReadAllText($settingsPath) | ConvertFrom-Json
+        if ($null -ne $settings.env -and $settings.env.CLAUDE_CODE_DISABLE_TERMINAL_TITLE -eq '1') {
+            $settings.env.PSObject.Properties.Remove('CLAUDE_CODE_DISABLE_TERMINAL_TITLE')
+            if (@($settings.env.PSObject.Properties).Count -eq 0) { $settings.PSObject.Properties.Remove('env') }
+            $json = $settings | ConvertTo-Json -Depth 100
+            [System.IO.File]::WriteAllText($settingsPath, $json, (New-Object System.Text.UTF8Encoding $false))
+            Write-Host 'Claude Code sets its own window title again.'
+        }
+    }
+} catch {
+    Write-Host "Could not change your Claude Code settings: $($_.Exception.Message)"
+    $problems += 'the window title setting could not be removed'
+}
 $mySounds = Join-Path $env:LOCALAPPDATA 'BlindClaude\sounds'
 if ($RemoveSounds -and (Test-Path -LiteralPath $mySounds)) {
     Remove-Item -LiteralPath $mySounds -Recurse -Force

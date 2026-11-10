@@ -16,7 +16,13 @@
 #   { "op": "play", "path": "C:\\...\\done-1.wav" }
 #   { "op": "voices" }
 #   { "op": "engine" }      asks for an ENGINE line
+#   { "op": "title", "text": "Working, Claude Code, project" }
 #   { "op": "quit" }
+#
+# The title command sets the title of the console Claude Code runs in, the
+# window or tab title. This process has a hidden console of its own, so it
+# joins Claude Code's console for a moment to set the title, then leaves
+# it. When Claude Code closes, the title it had before is put back.
 #
 # The engine setting: "auto" speaks through NVDA while it runs and through
 # the Windows voices otherwise, "nvda" only through NVDA, "windows" only
@@ -151,6 +157,84 @@ Get-ChildItem -Path $Spool -Filter *.json -ErrorAction SilentlyContinue | Remove
 # Keeps a reference to the player so a sound is not cut off by garbage collection.
 $player = $null
 
+# The processes above this one, nearest first, found when the first title
+# is set; Claude Code's console is the console of the first claude, node or
+# bun process among them. $originalTitle is the title before the first set.
+$ancestors = $null
+$consoleOwner = $null
+$originalTitle = $null
+
+function Initialize-ConsoleApi {
+    if ('BlindClaude.Con' -as [type]) { return }
+    Add-Type -Namespace BlindClaude -Name Con -MemberDefinition @'
+[DllImport("kernel32.dll", SetLastError = true)]
+public static extern bool FreeConsole();
+[DllImport("kernel32.dll", SetLastError = true)]
+public static extern bool AttachConsole(uint pid);
+[DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+public static extern bool SetConsoleTitleW(string title);
+[DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+public static extern uint GetConsoleTitleW(System.Text.StringBuilder title, uint size);
+[DllImport("kernel32.dll")]
+public static extern bool SetConsoleCtrlHandler(IntPtr handler, bool add);
+'@
+}
+
+function Find-ConsoleOwner {
+    if ($null -ne $script:ancestors) { return }
+    $script:ancestors = @()
+    $process = Get-CimInstance Win32_Process -Filter "ProcessId = $PID"
+    while ($process -and $script:ancestors.Count -lt 12) {
+        $process = Get-CimInstance Win32_Process -Filter "ProcessId = $($process.ParentProcessId)"
+        if ($process) { $script:ancestors += $process }
+    }
+    $script:consoleOwner = $script:ancestors | Where-Object { $_.Name -match '^(claude|node|bun)\.exe$' } | Select-Object -First 1
+}
+
+# Joins the console of process $ownerId, runs $action there, and leaves it.
+# Control C in that console is ignored by this process while it is joined.
+function Invoke-InConsole([uint32]$ownerId, [scriptblock]$action) {
+    [void][BlindClaude.Con]::FreeConsole()
+    if (-not [BlindClaude.Con]::AttachConsole($ownerId)) { return $false }
+    try {
+        [void][BlindClaude.Con]::SetConsoleCtrlHandler([IntPtr]::Zero, $true)
+        & $action
+    } finally {
+        [void][BlindClaude.Con]::FreeConsole()
+    }
+    return $true
+}
+
+function Set-WindowTitle([string]$text) {
+    Initialize-ConsoleApi
+    Find-ConsoleOwner
+    if ($null -eq $script:consoleOwner) {
+        Send-Line 'ERROR the window title cannot be set: Claude Code''s process was not found'
+        return
+    }
+    $isSet = Invoke-InConsole $script:consoleOwner.ProcessId {
+        if ($null -eq $script:originalTitle) {
+            $old = New-Object System.Text.StringBuilder 1024
+            [void][BlindClaude.Con]::GetConsoleTitleW($old, 1024)
+            $script:originalTitle = $old.ToString()
+        }
+        [void][BlindClaude.Con]::SetConsoleTitleW($text)
+    }
+    if (-not $isSet) { Send-Line 'ERROR the window title cannot be set: Claude Code''s console could not be reached' }
+}
+
+# Claude Code has closed: put the old title back, through a process above
+# it that shares its console, such as the shell it was started from.
+function Restore-WindowTitle {
+    if ($null -eq $script:originalTitle -or $null -eq $script:consoleOwner) { return }
+    $index = [Array]::IndexOf($script:ancestors, $script:consoleOwner)
+    foreach ($process in ($script:ancestors | Select-Object -Skip ($index + 1))) {
+        if (-not (Get-Process -Id $process.ProcessId -ErrorAction SilentlyContinue)) { continue }
+        $isSet = Invoke-InConsole $process.ProcessId { [void][BlindClaude.Con]::SetConsoleTitleW($script:originalTitle) }
+        if ($isSet) { return }
+    }
+}
+
 function Invoke-SpoolCommand($cmd) {
     switch ($cmd.op) {
         'speak' {
@@ -209,6 +293,9 @@ function Invoke-SpoolCommand($cmd) {
             })
             Send-Line ("VOICES " + (ConvertTo-Json -InputObject $list -Compress -Depth 3))
         }
+        'title' {
+            if ($null -ne $cmd.text) { Set-WindowTitle ([string]$cmd.text) }
+        }
         'quit' {
             Stop-Speech
             Send-Line 'STOP asked to quit'
@@ -261,6 +348,7 @@ while ($true) {
         $lastParentCheck = Get-Date
         if (Test-ParentAlive) { $parentMisses = 0 } else { $parentMisses++ }
         if ($parentMisses -ge 2) {
+            try { Restore-WindowTitle } catch { }
             Send-Line 'STOP Claude Code has closed'
             exit 0
         }
